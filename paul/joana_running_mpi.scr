@@ -1,0 +1,55 @@
+#!/bin/bash
+export OMP_NUM_THREADS=1S
+#  set up number of gridpoints to the side and computational configuration:
+ni=100
+npex=40
+config=${npex}'x1'
+cputimerun='.true.'
+#
+wrkDir=/home/pam001/joana_networkanalysis_intel/v6_netcdf/parallel
+wrkDir1=/home/pam001/joana_networkanalysis_intel/v6_netcdf/parallel/comp_${ni}_${config}
+mkdir /home/pam001/joana_networkanalysis_intel/v6_netcdf/parallel/comp_${ni}_${config}
+cd ${wrkDir}
+#
+rm arglist_${ni}_${config}.lst
+cat <<EOF >arglist_${ni}_${config}.lst
+/space/hall3/sitestore/eccc/aq/r1/pic001/joana/out_compressed_netcdf/
+2013 08 01
+2014 07 31
+${ni}
+'${config}'
+${npex}
+${cputimerun}
+/home/pam001/joana_networkanalysis_intel/v6_netcdf/parallel/output/
+.true.
+.false.
+.true.
+.true.
+EOF
+cp arglist_${ni}_${config}.lst ${wrkDir1}/arglist.lst
+cp joana.abs ${wrkDir1}/.
+cd ${wrkDir1}
+rm joana_batch.scr
+cat <<EOD >joana_batch.scr
+cd ${wrkDir1}
+. ssmuse-sh -x comm/eccc/all/opt/intelcomp/intelpsxe-cluster-19.0.3.199
+. ssmuse-sh -x hpco/exp/openmpi/openmpi-3.1.2--hpcx-2.4.0-mofed-4.6--intel-19.0.3.199
+. ssmuse-sh -x hpco/exp/openmpi-setup/openmpi-setup-0.2
+# load s.compile
+. r.load.dot /fs/ssm/eccc/mrd/rpn/code-tools/01.3
+# load rmnlib
+. r.load.dot rpn/libs/19.4
+. r.load.dot rpn/utils/19.4
+# loads netcdf (serial)stuff
+. ssmuse-sh -x hpco/exp/hdf5-netcdf4/serial/static/intel-19.0.3.199/02
+#
+#. /home/pam001/.profile.d_forall_v2/scr/step1_setup_comp_lib.scr
+export OMP_NUM_THREADS=1
+echo "location of r.run_in_parallel"
+which r.run_in_parallel
+r.run_in_parallel -npex ${npex} -inorder -pgm ${wrkDir1}/joana.abs
+EOD
+# on ppp3 -cpus 40x1 -cm 5G gives only one node; as a workaround use -cpus 44x44 -cm 210G
+#ord_soumet joana_batch.scr -mach eccc-ppp3 -cpus ${config} -cm 3G -waste 90 -t 2700 -mpi -jn makar_parallel_${ni}_${config} -listing /home/pam001/joana_networkanalysis_intel/v6_netcdf/parallel/listings
+ord_soumet joana_batch.scr -mach eccc-ppp3 -cpus ${config} -cm 3G -t 14000 -mpi -jn makar_parallel_${ni}_${config} -listing /home/pam001/joana_networkanalysis_intel/v6_netcdf/parallel/listings
+

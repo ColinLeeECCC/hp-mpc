@@ -1,0 +1,15 @@
+#
+#. /home/bap001/.profile.d_forall_v2/scr/step1_setup_comp_lib.scr
+wrkDir=/home/bap001/joana_networkanalysis_intel/v6_netcdf/parallel
+cd ${wrkDir}
+#. ${wrkDir}/step1_setup_comp_lib.scr
+
+#${wrkDir}/joana.abs
+export OMP_NUM_THREADS=1
+echo "location of r.run_in_parallel"
+which r.run_in_parallel
+#prefix="gmon_.out"
+#GMON_OUT_PREFIX= 
+
+#r.run_in_parallel -npex 1 -inorder -pgm ${wrkDir}/joana.abs
+r.run_in_parallel -npex 1 -inorder -pgm ${wrkDir}/joana.abs
