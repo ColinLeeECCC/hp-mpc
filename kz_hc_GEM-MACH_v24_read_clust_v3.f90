@@ -355,7 +355,7 @@
                         '_'//trim(tstep)//'p.netcdf4.compressed'
 !   Reading grid parameters
           write(*,*) 'bg_filename ', bg_filename
-          ierr = nf90_open( trim(bg_filename), NF90_NOWRITE, ncId) !, chunksize)
+          ierr = nf90_open( trim(bg_filename), NF90_NOWRITE, ncId, comm=MPI_COMM_WORLD, info=MPI_INFO_NULL) !, chunksize)
           if (ierr < 0) then
             print *,'Ending,error while opening ',trim(bg_filename)
             stop
@@ -590,7 +590,7 @@
 !   Open input files and read in the requested field for this model timestep
              readNETCDF2: if (.true.) then
 !
-               ierr = nf90_open( trim(bg_filename), NF90_NOWRITE, ncId) !, chunksize)
+               ierr = nf90_open( trim(bg_filename), NF90_NOWRITE, ncId, comm=MPI_COMM_WORLD, info=MPI_INFO_NULL) !, chunksize)
                if (ierr < 0) then
                  print *,'Ending,error while opening ',trim(bg_filename)
                  stop
