@@ -542,7 +542,9 @@
                ist = ist + 1
                sti(ist) = i
                stj(ist) = j
-               write(fu_in,*) igc,ist,sti(ist),stj(ist)
+               if (writeOutR) then
+                  write(fu_in,*) igc,ist,sti(ist),stj(ist)
+               endif
              end if
            end do
          end do
@@ -654,6 +656,7 @@
          ntr = 1/real(ndays*24)
          isr = real(is)
          !!$OMP PARALLEL DO SHARED(npairsId,station1,station2,minpst1,nts,data_st,sum_st,sum_stSQR,ntr,isr,dissMetric)
+         write(*,*) 'writeOutR = ', writeOutR
          if  (writeOutR) then
             fu_in = 30+myid
             write(ithrS,'(i2.2)') myid
@@ -672,6 +675,7 @@
                            'dissMetric(i)'
          end if
          write(*,*) 'compute metric'
+         write(*,*) 'fu_in = ', fu_in
          do i = 1,npairsId
             st1Tmp = station1(i)-station1(1)+1
             st2Tmp = station2(i)-minpst1+1
@@ -681,10 +685,11 @@
                            data_st(st1Tmp,ict) * data_st(st2Tmp,ict)
             end do
 !            write(*,*) 'st1Tmp,st2Tmp,nst',st1Tmp,st2Tmp,nst
-            write(fu_in,*) i,station1(i), station2(i), &
+            if (writeOutR) then
+               write(fu_in,*) i,station1(i), station2(i), &
                            st1Tmp,st2Tmp, data_st(st1Tmp,nts), &
                            data_st(st2Tmp,nts)
-           
+            endif
             data_st1 = sum_st(st1Tmp)
             data_st2 = sum_st(st2Tmp)
             SXY = sum_st1st2 - (data_st1*data_st2*ntr)
