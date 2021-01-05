@@ -18,5 +18,5 @@ set -x
 . ssmuse-sh -x hpco/exp/hdf5-netcdf4/parallel/openmpi-3.1.2/static/intel-19.0.3.199/01
 #
 #s.compile -src kz_hc_GEM-MACH_v24_read_clust_v3.f90 -o joana.abs -openmp -mpi  -librmn -libappl netcdff netcdf hdf5_hl hdf5 z curl irc
-s.compile -src kz_hc_GEM-MACH_v24_read_clust_v3.f90 -o joana.abs -openmp -mpi  -librmn -libappl netcdff netcdf hdf5_hl hdf5 z curl irc
+s.compile -src kz_hc_GEM-MACH_v24_read_clust_v3.f90 -o kzCluster.abs -openmp -mpi  -librmn -libappl netcdff netcdf hdf5_hl hdf5 z curl irc
 #s.compile -src kz_hc_GEM-MACH_v24_read_clust_v3.f90 -o joana.abs -optf="-C -pg -traceback -fp-model strict -mp1 -warn all" -openmp -mpi  -librmn -libappl netcdff netcdf hdf5_hl hdf5 z curl irc

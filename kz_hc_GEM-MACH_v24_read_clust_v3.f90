@@ -43,11 +43,10 @@
 !      use ARMN
 !      use mpi
       use NETCDF
+      use MPI
 
       implicit none
 
-       include 'mpif.h'
-       include 'netcdf.inc'
  
       integer,parameter                       :: i8 = selected_int_kind(15), &
                                                  sp = kind(1.0),             &
@@ -423,26 +422,20 @@
        end if readFST
 !
 !  Get grid and number of clusters
-       !nst = bggrid_ni * bggrid_nj
-       ni = bggrid_ni !int(bggrid_ni/10)
-       nj = bggrid_nj !int(bggrid_nj/10)
        i =  fractC
        ni = int(bggrid_ni/i)
        nj = int(bggrid_nj/i)
-!
-!
-! FOR TESTING with seq
-       ni =  fractC
-       nj =  fractC
-!
-!
+!       ni = i
+!       nj = i
        nst = ni*nj
+
 !  lower and upper bound of the clusering
        iclus1 = 2
        iclus2 = nst-1
-       npairs = map(nst,nst-1,nst)
+       npairs = map(nst,nst-1,nst) ! this is the same as (nst * (nst-1)/2)
        if (myid == root) then
          write(*,*) 'ni nj nst npairs', ni, nj, nst, npairs 
+         flush( 6 )
        end if
        !if (myid ==0 ) then
        !  write(*,*) 'range: pairs and strS',range(npairs),range(strS) 
@@ -482,6 +475,7 @@
          id4cl(myprocs) = nst-1
 
        end if ! myid = 0
+       flush( 6 )
 !
 !    Brodcast information to the diferent processors
        call MPI_Bcast(strS, myprocs, mpiTypei8, root, MPI_COMM_WORLD, ierr)
@@ -499,6 +493,7 @@
                    npairsId
          write(*,*) 'PI',myid, &
                     'start & end pair', strS(myid+1),endS(myid+1) 
+         flush( 6 )
          allocate(station1(npairsId),station2(npairsId))  
          ict = 0
          !!$OMP PARALLEL DO PRIVATE(i,j,igc)
@@ -534,6 +529,7 @@
                   status='replace', form='formatted', iostat=ierr)
              write(fu_in,*) 'igc,ist,sti,stj'
          end if
+         flush( 6 )
 
          do i = 1,ni
            do j = 1,nj
@@ -573,6 +569,7 @@
  
         !# reading files for the time period requested
          write(*,*) 'reading files'
+         flush( 6 )
          do iday = 1,ndays
            call j2d(jDayS+(iday)*1.0,cur_date,err)
            write(model_date, '(i8.8)') cur_date
@@ -648,6 +645,7 @@
          deallocate(sti,stj)
 !!
          write(*,*) 'writting ended'
+         flush( 6 )
          minpst1 = minp
          maxpst1 = maxval(station1)
          allocate(dissMetric(npairsId))
@@ -676,6 +674,7 @@
          end if
          write(*,*) 'compute metric'
          write(*,*) 'fu_in = ', fu_in
+         flush( 6 )
          do i = 1,npairsId
             st1Tmp = station1(i)-station1(1)+1
             st2Tmp = station2(i)-minpst1+1
@@ -743,6 +742,7 @@
         IF_CLUSTERS_NAVAIL: if (clusters_not_available) then !! needs input from sub compute_metric
 !
          write(*,'(a2,1x,i2.2,a30)') 'PI',myid,'clustering stations'
+         flush( 6 )
          !!$OMP PARALLEL SHARED(numThr)
          ! numThr = omp_get_num_threads()
          !!$OMP END PARALLEL
@@ -842,6 +842,7 @@
           iclIdpi = 0 !counter for individual processors
           do icl = 1,nst-1
             write(*,*) 'cluster step: ', icl, '########################'
+            flush( 6 )
             lloc = 0
             minDloc = 999999999.
             lloc = -999999999
@@ -963,21 +964,10 @@
               jpl1 = min(st2Id,igc)
               jpl2 = max(st2Id,igc)
               i = map(nst,jpl1,jpl2) ! i< j  i = jpl2 + (jpl1-1)*nst - (jpl1*(jpl1+1))/2
-              if (i >= strS(myid+1) .and. i <= endS(myid+1) &
-                                    .and. i <= npairsId) then 
-                il = i
-                dissM_i = dissMetric(il)
-!           write(fu_in2,*) '1i is in the current PI,myid, i,il, dissM_i',&
-!                           myid,i,il, dissM_i
-                pi_i = myid
-              elseif (i >= strS(myid+1) .and. i <= endS(myid+1) &
-                                        .and. i > npairsId) then
+              if (i >= strS(myid+1) .and. i <= endS(myid+1)) then
                 il = i - strS(myid+1)+ 1 
                 dissM_i = dissMetric(il)
-!           write(fu_in2,*) '2i is in the current PI,myid, i,il, dissM_i',&
-!                           myid,i,il, dissM_i
                 pi_i = myid
- 
               else 
                 do pi = 1, myprocs
                   if (i >= strS(pi) .and. i <= endS(pi)) then
@@ -987,8 +977,6 @@
                   end if
                 end do 
                 dissM_i = dissMetric(il)
-!         write(fu_in2,*) '3i is not in the current PI,myid,i,il,dissM_i',&
-!                           myid,i,il, dissM_i 
               end if  
               call MPI_Gather(dissM_i, 1, MPI_DOUBLE_PRECISION, &
                                rbuf_i, 1, MPI_DOUBLE_PRECISION,0, &
@@ -998,38 +986,19 @@
               jpl1 = min(st1Id,igc)
               jpl2 = max(st1Id,igc)
               j = map(nst,jpl1,jpl2) ! j = jpl2 + (jpl1-1)*nst - (jpl1*(jpl1+1))/2
-              if (j >= strS(myid+1) .and. j <= endS(myid+1) &
-                                    .and. j <= npairsId) then 
-                jl = j
-                dissM_j = dissMetric(jl)
-!                write(fu_in2,*) '1j is in the current PI, ', &
-!                                'myid, j,jl, dissM_j',&
-!                                 myid,j,jl, dissM_j
-                pi_j = myid
-              elseif (j >= strS(myid+1) .and. j <= endS(myid+1) &
-                                        .and. j > npairsId) then
+              if (j >= strS(myid+1) .and. j <= endS(myid+1)) then
                 jl = j - strS(myid+1)+ 1
                 dissM_j = dissMetric(jl)
-!                write(fu_in2,*) '2j is in the current PI, ', &
-!                                'myid, j,jl, dissM_j',&
-!                                 myid,j,jl, dissM_j
                 pi_j = myid
               else 
                 do pi = 1, myprocs
-!                  write(*,*) 'pi,strS(pi),endS(pi),j', &
-!                             pi,strS(pi),endS(pi), j, j - strS(pi)+ 1
                   if (j >= strS(pi) .and. j <= endS(pi)) then
                     jl = j - strS(pi)+ 1
                     pi_j = pi-1
                     exit
                   end if
-!                  write(*,*) 'pi,strS(pi),endS(pi),j', &
-!                             pi,strS(pi),endS(pi), j, j - strS(pi)+ 1
                 end do
                 dissM_j = dissMetric(jl)
-!                write(*,*) '3j is not in the current PI, ', &
-!                           'myid, j,jl, dissM_j',&
-!                           myid,j,jl, dissM_j 
               end if  
               call MPI_Gather(dissM_j, 1, MPI_DOUBLE_PRECISION, &
                               rbuf_j, 1, MPI_DOUBLE_PRECISION,0, &
