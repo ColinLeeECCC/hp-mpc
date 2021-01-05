@@ -12,11 +12,14 @@ set -x
 # load rmnlib
 . r.load.dot rpn/libs/19.4
 . r.load.dot rpn/utils/19.4
-# loads netcdf (serial)stuff
-#. ssmuse-sh -x hpco/exp/hdf5-netcdf4/serial/static/intel-19.0.3.199/02
 # For parallel version of HDF5/NetCDF
 . ssmuse-sh -x hpco/exp/hdf5-netcdf4/parallel/openmpi-3.1.2/static/intel-19.0.3.199/01
 #
-#s.compile -src kz_hc_GEM-MACH_v24_read_clust_v3.f90 -o joana.abs -openmp -mpi  -librmn -libappl netcdff netcdf hdf5_hl hdf5 z curl irc
-s.compile -src kz_hc_GEM-MACH_v24_read_clust_v3.f90 -o kzCluster.abs -openmp -mpi  -librmn -libappl netcdff netcdf hdf5_hl hdf5 z curl irc
-#s.compile -src kz_hc_GEM-MACH_v24_read_clust_v3.f90 -o joana.abs -optf="-C -pg -traceback -fp-model strict -mp1 -warn all" -openmp -mpi  -librmn -libappl netcdff netcdf hdf5_hl hdf5 z curl irc
+
+# s.compile -src kz_hc_GEM-MACH_v24_read_clust_v3.f90 mheap.f90 -openmp -mpi  -librmn -libappl netcdff netcdf hdf5_hl hdf5 z curl irc
+s.compile -src cluster.f90 mheap.f90 -openmp -mpi  -librmn -libappl netcdff netcdf hdf5_hl hdf5 z curl irc
+
+# s.compile -obj kz_hc_GEM-MACH_v24_read_clust_v3.o mheap.o -o kzCluster.abs -openmp -mpi  -librmn -libappl netcdff netcdf hdf5_hl hdf5 z curl irc
+
+s.compile -obj cluster.o mheap.o -o cluster.abs -openmp -mpi  -librmn -libappl netcdff netcdf hdf5_hl hdf5 z curl irc
+

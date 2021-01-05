@@ -1,6 +1,5 @@
 #!/bin/bash
 rm joana_batch.scr
-export OMP_NUM_THREADS=1
 cat <<EOD >jobscript.sh
 #loads intel compiler and MPI library ...mandatory for eccc-ppp3,4
 . ssmuse-sh -x comm/eccc/all/opt/intelcomp/intelpsxe-cluster-19.0.3.199
@@ -20,9 +19,9 @@ cat <<EOD >jobscript.sh
 wrkDir=/space/hall3/sitestore/eccc/aq/r1/cle001/src/parallel
 cd \${wrkDir}
 
-r.run_in_parallel -npex 1 -inorder -pgm \${wrkDir}/kzCluster.abs
+r.run_in_parallel -npex 40 -inorder -pgm \${wrkDir}/cluster.abs
 EOD
 # on ppp3 -cpus 40x1 -cm 5G gives only one node; as a workaround use -cpus 44x44 -cm 210G
-ord_soumet jobscript.sh -mach eccc-ppp3 -cpus 1x1 -cm 10G -waste 90 -t 16200 -mpi -jn colin_parallel -listing /space/hall3/sitestore/eccc/aq/r1/cle001/src/parallel/listings
+ord_soumet jobscript.sh -mach eccc-ppp3 -cpus 40x40 -cm 100G -waste 90 -w 15 -mpi -jn colin_parallel -listing /space/hall3/sitestore/eccc/aq/r1/cle001/src/parallel/listings
 #ord_soumet joana_batch.scr -mach eccc-ppp4 -cpus 4x1 -cm 10G -waste 90 -t 16200 -mpi -jn pabla -listing /home/bap001/joana_networkanalysis/v5_netcdf/parallel/listings
 
