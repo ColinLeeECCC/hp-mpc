@@ -1,5 +1,23 @@
 #!/bin/bash
-rm joana_batch.scr
+
+# set up batch system parameters for MPI threads and wall clock time (min)
+# this setup should be suitable for a useFract = 6 or up
+NODESX=1   # number of nodes
+NODESY=4   # MPI threads per node
+WTIME=10    # wall clock time in minutes
+# use this setup for using all the data useFract=1
+# NODESX=40   # number of nodes
+# NODESY=1   # MPI threads per node
+# WTIME=60    # wall clock time in minutes
+
+# Assume we want to use a whole node so set OMPTHREADS and MEM
+# to the cores and memory per node divided by the number of MPI
+# threads per node. OMPTHREADS is not the same as the OMP variable
+# OMP_NUM_THREADS because that should be set by the grid engine.
+OMPTHREADS=$(( 40 / NODESY ))
+MEM="$(( 160 / NODESY ))G"
+
+rm jobscript.sh
 cat <<EOD >jobscript.sh
 #loads intel compiler and MPI library ...mandatory for eccc-ppp3,4
 . ssmuse-sh -x comm/eccc/all/opt/intelcomp/intelpsxe-cluster-19.0.3.199
@@ -19,9 +37,8 @@ cat <<EOD >jobscript.sh
 wrkDir=/space/hall3/sitestore/eccc/aq/r1/cle001/src/parallel
 cd \${wrkDir}
 
-r.run_in_parallel -npex 40 -inorder -pgm \${wrkDir}/cluster.abs
+r.run_in_parallel -npex ${NODESX} -npey ${NODESY} -inorder -pgm \${wrkDir}/cluster.abs
 EOD
 # on ppp3 -cpus 40x1 -cm 5G gives only one node; as a workaround use -cpus 44x44 -cm 210G
-ord_soumet jobscript.sh -mach eccc-ppp3 -cpus 40x40 -cm 100G -waste 90 -w 15 -mpi -jn colin_parallel -listing /space/hall3/sitestore/eccc/aq/r1/cle001/src/parallel/listings
-#ord_soumet joana_batch.scr -mach eccc-ppp4 -cpus 4x1 -cm 10G -waste 90 -t 16200 -mpi -jn pabla -listing /home/bap001/joana_networkanalysis/v5_netcdf/parallel/listings
 
+ord_soumet jobscript.sh -mach eccc-ppp3 -cpus ${NODESX}x${NODESY}x${OMPTHREADS} -cm ${MEM} -waste 90 -w ${WTIME} -mpi -jn colin_parallel -listing /space/hall3/sitestore/eccc/aq/r1/cle001/src/parallel/listings
