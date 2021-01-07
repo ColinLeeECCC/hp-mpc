@@ -41,12 +41,18 @@
     integer, dimension(NF90_MAX_VAR_DIMS) &
                                :: dimIds
     integer                    :: grid_ni, grid_nj, grid_nt
+    integer                    :: gridi, gridj, gridi2, gridj2
     real*8, allocatable, dimension(:,:) &
                                :: buffer, tracer_time_ser
     real*8, allocatable, dimension(:) &
-                               :: tracer_sum, tracer_sqsum
-    real*8                     :: tracer_tmp
-    integer                    :: numDays
+                               :: tracer_sum, tracer_sqsum, &
+                               tracer_xysum
+    integer, allocatable, dimension(:) &
+                               :: tracer_n, tracer_xn
+    real*8                     :: tracer_tmp, tracer_tmp2
+    integer                    :: numDays, numTimesteps
+    real*8                     :: SXY, SXX, SYY
+    
 
     ! clustering information
     integer(kind=8)            :: numPoints, numPairs
@@ -57,6 +63,9 @@
     integer(kind=8)            :: myPairsStart, myPairsEnd, myPairs
     integer,allocatable,dimension(:) &
                                :: myPairsI, myPairsJ
+    integer,allocatable,dimension(:) &
+                               :: numEdges ! store the number of Js for each I since
+                                           ! many will be zero we can avoid allocating those
     
     ! mpi information
     integer, parameter         :: ROOT = 0
@@ -64,11 +73,20 @@
     integer                    :: ierr
     integer                    :: status(MPI_STATUS_SIZE)
     real*8                     :: startTimer, endTimer
+
+    ! priority queue variables
+    real*8                     :: node(3)
+    TYPE(THEAP), allocatable, dimension(:) &
+                               :: PQueue
+    
     ! miscellanceous variables
-    integer                    :: I, J
+    integer                    :: I, J, II
     integer(kind=8)            :: L, M, N
     integer(kind=8)            :: IND, IND1
     integer                    :: IDAY, IHR, HRS_SINCE_START
+    real*8                     :: RMIN, RMAX, R, Nt
+
+    
     ! begin program
     
     ! initialize MPI
@@ -184,7 +202,10 @@
 
     myPointMin = MIN( MINVAL( myPairsI ), MINVAL( myPairsJ ) )
     myPointMax = MAX( MAXVAL( myPairsI ), MAXVAL( myPairsJ ) )
-    myPoints   = myPairMax - myPairMin + 1
+    myPoints   = myPointMax - myPointMin + 1
+!    if (myRank == ROOT) &
+         WRITE(*,*) ' I have ', myPoints, ' points to care about. (', myPointMin,&
+                    ' to ', myPointMax
 
     endTimer = MPI_Wtime()
     
@@ -230,6 +251,7 @@
     call d2j(start_vec, start_julian, ierr)
     call d2j(  end_vec,   end_julian, ierr)
     numDays = int(end_julian - start_julian + 1)
+    numTimesteps = numDays * 24
 
 108 FORMAT(A, i8.8, i2.2 '_', i6.6, 'p.netcdf4.compressed')
 ! 109 FORMAT(' Allocating ', i5, ', ', i5, ' for ', A)
@@ -243,11 +265,22 @@
 !     IF (myRank == ROOT) &
 !          WRITE(*,*) ' Allocated BUFFER'
 
-    ALLOCATE(TRACER_TIME_SER( myPairs, numDays * 24 ))
+    ALLOCATE(TRACER_TIME_SER( myPoints, numDays * 24 ))
 !     IF (myRank == ROOT) &
 !          WRITE(*,*) ' Allocated TRACER_TIME_SER'
-    ALLOCATE(TRACER_SUM( myPairs ))
-    ALLOCATE(TRACER_SQSUM( myPairs ))
+    ALLOCATE(  TRACER_SUM( myPoints ))
+    ALLOCATE(    TRACER_N( myPoints ))
+    ALLOCATE(TRACER_SQSUM( myPoints ))
+    ALLOCATE(    numEdges( myPoints ))
+    ALLOCATE(TRACER_XYSUM( myPairs ))
+    ALLOCATE(   TRACER_XN( myPairs ))
+
+    TRACER_SUM = 0d0
+    TRACER_SQSUM = 0d0
+    TRACER_XYSUM = 0d0
+    numEdges = 0
+    TRACER_N = 0
+    TRACER_XN = 0
     
     DO IDAY = 1, numDays
        call j2d(start_julian+IDAY*1.0, current_date, ierr)
@@ -290,27 +323,173 @@
           HRS_SINCE_START = 24 * ( IDAY - 1 ) + IHR
 !           IF (myRank == ROOT) &
 !               WRITE(*,*) '   Hrs_since_start = ', HRS_SINCE_START
-          !$OMP PARALLEL DO       &
-          !$OMP DEFAULT( SHARED ) &
-          !$OMP PRIVATE( I, J, L )
-          !$OMP 
-          DO L = 1,myPairs
-             TRACER_TMP = BUFFER( myPairsI(L), myPairsJ(L) )
-             TRACER_TIME_SER( L, HRS_SINCE_START ) = TRACER_TMP
-             TRACER_SUM( L )   = TRACER_SUM( L )   + TRACER_TMP
-             TRACER_SQSUM( L ) = TRACER_SQSUM( L ) + TRACER_TMP * TRACER_TMP
+          !$OMP PARALLEL DO                      &
+          !$OMP DEFAULT( SHARED )                &
+          !$OMP PRIVATE( I, J, GRIDI, GRIDJ, L ) &
+          !$OMP PRIVATE( TRACER_TMP, GRIDI2 )    &
+          !$OMP PRIVATE( GRIDJ2, TRACER_TMP2 )
+          DO II = 1,int(myPoints, 4)
+             I = II + myPointMin - 1
+             GRIDI = (I - 1) / GRID_NJ + 1
+             GRIDJ = (I - 1) - (GRIDI - 1) * GRID_NJ + 1
+             TRACER_TMP = BUFFER( GRIDI, GRIDJ )
+!             IF (myRank == ROOT .and. IHR == 1) &
+!                  WRITE(*,*) 'TR(', GRIDI, ',', GRIDJ,') = ', TRACER_TMP
+             TRACER_TIME_SER( II, HRS_SINCE_START ) = TRACER_TMP
+             TRACER_SUM( II )   = TRACER_SUM( II )   + TRACER_TMP
+             TRACER_SQSUM( II ) = TRACER_SQSUM( II ) + TRACER_TMP * TRACER_TMP
+             TRACER_N(II) = TRACER_N(II) + 1
+             DO L = 1,myPairs
+                IF ( myPairsI(L) .EQ. I ) THEN
+                   numEdges(II) = numEdges(II) + 1
+                   J = myPairsJ(L)
+                   GRIDI2 = (J - 1) / GRID_NJ + 1
+                   GRIDJ2 = (J - 1) - ( GRIDI2 - 1 ) * GRID_NJ + 1
+                   TRACER_TMP2 = BUFFER( GRIDI2, GRIDJ2 )
+                
+                   TRACER_XYSUM( L ) = TRACER_XYSUM( L ) + &
+                        TRACER_TMP * TRACER_TMP2
+                   TRACER_XN(L) = TRACER_XN(L) + 1
+                ENDIF
+             ENDDO
           ENDDO
           !$OMP END PARALLEL DO
           
        ENDDO
-    ENDDO       
+    ENDDO
 
     endTimer = MPI_Wtime()
     WRITE(*,105) myRank, endTimer - startTimer
+    startTimer = endTimer
+
+    J = 0
+    DO I = 1,myPoints
+       IF (TRACER_N(I) .NE. numTimesteps .and. &
+            TRACER_N(I) .NE. 0) &
+            WRITE(*,*) 'N(', I, ') = ', TRACER_N(I)
+       IF (TRACER_N(I) .EQ. numTimesteps) &
+            J = J + 1
+    ENDDO
+    WRITE(*,*) J, ' points had valid sums'
+    J = 0
+    DO L = 1,myPairs
+       IF (TRACER_XN(L) .NE. numTimesteps .and. &
+            TRACER_XN(L) .NE. 0) &
+            WRITE(*,*) 'XN(', L, ') = ', TRACER_XN(L)
+       IF (TRACER_XN(L) .EQ. numTimesteps) &
+            J = J + 1
+    ENDDO
+    WRITE(*,*) J, ' points had valid sums'
     
+    IF (myRank == ROOT) THEN
+         WRITE(*,*) 'TRACER_SUM(1:10) = ',   TRACER_SUM(1:10)
+         WRITE(*,*) 'TRACER_SQSUM(1:10) = ', TRACER_SQSUM(1:10)
+      ENDIF
+
     DEALLOCATE( BUFFER )
     DEALLOCATE( TRACER_TIME_SER )
 
+    RMIN = 999d99
+    RMAX = -999d99
+    Nt = real(numTimesteps, 8)
+    !
+    ! Okay,this is where things get a little bit mind-bending. We need to allocate
+    ! a priority queue for each MPI process that will initially store 1 cluster
+    ! for each pair. The cluster will get an ID, a score, and a cardinality. The
+    ! priority queue sorts the clusters by score and returns the minimum quickly.
+    ! As points are clustered, we need to store how many points are in a cluster
+    ! so we can average the scores appropriately.
+    if (myRank == ROOT) &
+         WRITE(*,*) ' Allocating pQueue with len=', myPoints
+    ALLOCATE(PQueue(myPoints))
+    if (myRank == ROOT) &
+         WRITE(*,*) ' Allocated'
+    ! This loop may not be OMP-able as it stands
+    DO I = 1,numPoints
+       IF (I .LT. myPointMin) CYCLE
+
+       ! Create min-heap for this node. Will be zero if there are no edges
+       CALL PQueue(I - myPointMin + 1)%INIT( numEdges(I), 3, GREATER1 )
+       
+       IF (numEdges(I) .GT. 0) THEN
+          DO L = 1,myPairs
+             IF (I .EQ. myPairsI(L)) THEN
+                J = myPairsJ(L) - myPointMin + 1
+                N = I - myPointMin + 1
+                ! Store the ID of the cluster we're pairing with
+                NODE(2) = real(J, 8)
+                ! Cardinality is 1 since there's only one node per cluster
+                NODE(3) = 1d0
+                ! compute the 1-R for this pair of clusters
+                ! I'm having trouble understanding the math in the original code.
+                ! It doesn't seem to actually compute pearson R. Optimised
+                ! to avoid divisions
+                SXY = tracer_xysum(L) * Nt - &
+                     tracer_sum(N) * tracer_sum(J)
+                SXX = tracer_sqsum(N) * Nt - &
+                     ( tracer_sum(N) * tracer_sum(N))
+                SYY = tracer_sqsum(J) * Nt - &
+                     ( tracer_sum(J) * tracer_sum(J) )
+
+                ! IF (myRank == ROOT) THEN
+                !    WRITE(*,*) 'numTimesteps = ', numTimesteps, ' Exy = ',tracer_xysum(L)
+                !    WRITE(*,*) 'Ex = ', tracer_sum(I), 'Ey = ', tracer_sum(J)
+                !    WRITE(*,*) 'Ex2 = ', tracer_sqsum(I), 'Ey2 = ', tracer_sqsum(J)
+                !    WRITE(*,*) 'SXY = ', SXY, 'SXX = ', SXX, 'SYY = ', SYY
+                !    WRITE(*,*) 'R = ', SXY / SQRT( SXY * SYY )
+                ! ENDIF
+                IF ( SXX .eq. 0d0 .or. SYY .eq. 0d0 ) THEN
+                   NODE(1) = 1d0
+                   WRITE(*,*) 'Rank ', myRank, ' got bad statistics at ', I, ',', J
+                   WRITE(*,*) 'Ex = ', tracer_sum(I), 'Ey = ', tracer_sum(J)
+                   WRITE(*,*) 'Ex2 = ', tracer_sqsum(I), 'Ey2 = ', tracer_sqsum(J)
+                   WRITE(*,*) 'SXY = ', SXY, 'SXX = ', SXX, 'SYY = ', SYY
+                ELSE
+                   R = SXY / SQRT( SXX * SYY )
+                   IF ( R < -1d0 .or. R > 1d0 ) THEN
+                      WRITE(*,*) 'Rank ', myRank, ' got weird R at ', I, ',', J
+                      WRITE(*,*) 'Exy = ', tracer_xysum(L), ' Nt = ', Nt
+                      WRITE(*,*) 'Ex = ', tracer_sum(I), 'Ey = ', tracer_sum(J)
+                      WRITE(*,*) 'Ex2 = ', tracer_sqsum(I), 'Ey2 = ', tracer_sqsum(J)
+                      WRITE(*,*) 'SXY = ', SXY, 'SXX = ', SXX, 'SYY = ', SYY
+                      WRITE(*,*) 'Tx(', MINVAL(TRACER_TIME_SER( N, : ) ), ', ', &
+                           MAXVAL( TRACER_TIME_SER( N, : ) ), ')'
+                      WRITE(*,*) 'Ty(', MINVAL(TRACER_TIME_SER( J, : ) ), ', ', &
+                           MAXVAL( TRACER_TIME_SER( J, : ) ), ')'
+                   ENDIF
+                   IF (R < RMIN) RMIN = R
+                   IF (R > RMAX) RMAX = R
+                   NODE(1) = (1d0 - R )
+                ENDIF
+
+                CALL PQueue(N)%INSERT( NODE )
+             ENDIF
+          ENDDO
+       ENDIF
+    ENDDO
+    
+    endTimer = MPI_Wtime()
+    WRITE(*,105) myRank, endTimer - startTimer
+    WRITE(*,*) ' Rank ', myRank, ' saw R range from ', RMIN, ' to ', RMAX
+
+    IF (myRank == ROOT) THEN
+       DO I = 1,myPoints,myPoints / 10
+          IF ( I .GE. myPointMin ) THEN
+             N = I - myPointMin
+             L = PQueue(N)%SIZE()
+             J = MAX( L / 2, 1 )
+             IF ( L .GT. 0_i8 ) THEN
+                WRITE(*,*) 'Pqueue(', I, ') = ['
+                call PQueue(N)%PEEK(1, NODE)
+                WRITE(*,*), NODE, '...'
+                call PQueue(N)%PEEK(J, NODE)
+                WRITE(*,*), NODE, '...'
+                call PQueue(N)%PEEK(INT(L,4), NODE)
+                WRITE(*,*), NODE, '](', int(L, 4), ')'
+             ENDIF
+          ENDIF
+       ENDDO
+    ENDIF
     
     call MPI_FINALIZE(ierr)
     
@@ -443,3 +622,4 @@
     END FUNCTION GREATER2
 
   END PROGRAM CLUSTER
+  
