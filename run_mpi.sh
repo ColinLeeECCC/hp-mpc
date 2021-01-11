@@ -4,7 +4,7 @@
 # this setup should be suitable for a useFract = 6 or up
 NODESX=1   # number of nodes
 NODESY=4   # MPI threads per node
-WTIME=10    # wall clock time in minutes
+WTIME=15    # wall clock time in minutes
 # use this setup for using all the data useFract=1
 # NODESX=40   # number of nodes
 # NODESY=1   # MPI threads per node
