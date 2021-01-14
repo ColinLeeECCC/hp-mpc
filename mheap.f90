@@ -50,6 +50,7 @@ TYPE :: THEAP
    PROCEDURE :: INSERT  => HEAP_INSERT
    PROCEDURE :: PEEK    => HEAP_PEEK
    PROCEDURE :: POP     => HEAP_POP
+   PROCEDURE :: DELETE  => HEAP_DELETE
    PROCEDURE :: REHEAP  => HEAP_REHEAP
    PROCEDURE :: SIZE    => HEAP_SIZE
    FINAL     :: HEAP_RELEASE
@@ -149,6 +150,58 @@ CONTAINS
       CALL HEAP_GROW( HEAP, 1 )
 
    END SUBROUTINE HEAP_POP
+
+   RECURSIVE SUBROUTINE HEAP_DELETE( HEAP, NODE, KSTART, DONE)                  
+      ! Retrieve the root element off the heap. The resulting tree is re-heaped.
+      ! No data is deleted, thus the original 
+      !   input
+      !        heap - the heap 
+      !   output 
+      !        node - the deleted node 
+      CLASS(THEAP) :: HEAP
+      DOUBLE PRECISION :: NODE( HEAP%NLEN )
+      INTEGER, OPTIONAL :: KSTART, DONE
+      INTEGER           :: I, K, IL, IR, DTMP
+
+      IF( HEAP%N .EQ. 0 ) RETURN
+
+      K = 1
+      IF (PRESENT( KSTART )) K = KSTART
+
+      ! IF (K .eq. 1) WRITE(*,'(A,i2)') 'N = ', HEAP%N
+      ! WRITE(*,101) K, HEAP%DATA(:,HEAP%INDX(K))
+101   FORMAT('Checking if ', i2, ', ', F5.3, ', ', F5.3, ' is our node')
+      ! if the root node has our value, we can skip the search
+      IF ( ALL( HEAP%DATA(:,HEAP%INDX(K)) .eq. NODE ) ) THEN
+         I = K
+      
+         ! WRITE(*,*) 'Deleting node ', I, ': ', HEAP%DATA(:,HEAP%INDX(I))
+      
+         CALL SWAPINT( HEAP%INDX(I), HEAP%INDX(HEAP%N) )
+      
+         HEAP%N = HEAP%N - 1
+
+         CALL HEAP_GROW( HEAP, I )
+
+         IF (PRESENT( DONE ) ) DONE = 1
+      ELSEIF ( K*2 .LE. HEAP%N ) THEN
+         IL = K*2
+         IR = K*2 + 1
+         DTMP = 0
+         CALL HEAP%DELETE(NODE, IL, DTMP )
+         ! WRITE(*,102) IL, DTMP
+102      FORMAT('Back from delete ', i2, ', done = ', i1)
+         IF ( DTMP .eq. 1 ) THEN
+            IF (PRESENT( DONE ) ) DONE = DTMP
+         ELSEIF (IR .LE. HEAP%N) THEN
+            CALL HEAP%DELETE(NODE, IR)
+            IF (PRESENT( DONE ) ) DONE = DTMP
+         ENDIF
+      ELSE
+         ! WRITE(*,*) 'Traversed to the end and didn''t find it'
+      ENDIF
+
+   END SUBROUTINE HEAP_DELETE
 
    SUBROUTINE HEAP_PEEK( HEAP, K, NODE )                      
       ! Access the k-th node of the heap
