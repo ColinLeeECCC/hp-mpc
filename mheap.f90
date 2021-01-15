@@ -53,6 +53,7 @@ TYPE :: THEAP
    PROCEDURE :: DELETE  => HEAP_DELETE
    PROCEDURE :: REHEAP  => HEAP_REHEAP
    PROCEDURE :: SIZE    => HEAP_SIZE
+   PROCEDURE :: CLEAR   => HEAP_RESET
    FINAL     :: HEAP_RELEASE
 END TYPE THEAP
 
@@ -84,6 +85,17 @@ CONTAINS
          HEAP%INDX(I)=I
       ENDDO
    END SUBROUTINE HEAP_INIT
+
+   SUBROUTINE HEAP_RESET(HEAP)
+     ! clears heap of data
+     CLASS(THEAP) :: HEAP
+     INTEGER :: I
+     HEAP%N      = 0
+     HEAP%M      = 0
+      DO I = 1, HEAP%NMAX
+         HEAP%INDX(I)=I
+      ENDDO
+   END SUBROUTINE HEAP_RESET
    
    SUBROUTINE HEAP_RELEASE(HEAP)                                       
       ! Releases all the allocated memory and resets the heap

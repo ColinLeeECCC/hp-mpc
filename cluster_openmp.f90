@@ -340,9 +340,7 @@
 106    FORMAT('Clustering ', i3, ' and ', i3, ' (1-R) = ', F8.6)
        
        LIVE(K2) = .false.
-       DO WHILE (PQueue(K1).SIZE() .gt. 0)
-          call PQueue(K1)%POP()
-       ENDDO
+       call PQueue(K1)%CLEAR()
 
        !$OMP PARALLEL DO                    &
        !$OMP DEFAULT( SHARED )              &

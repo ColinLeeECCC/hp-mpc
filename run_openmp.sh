@@ -32,7 +32,7 @@ ulimit -s 2G
 wrkDir=/space/hall3/sitestore/eccc/aq/r1/cle001/src/parallel
 cd \${wrkDir}
 
-\${wrkDir}/cluster.abs
+\${wrkDir}/cluster_omp.abs
 EOD
 # on ppp3 -cpus 40x1 -cm 5G gives only one node; as a workaround use -cpus 44x44 -cm 210G
 
