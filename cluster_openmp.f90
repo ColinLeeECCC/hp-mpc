@@ -73,6 +73,8 @@
     real*8                     :: R, RMIN, RMAX, Nt
 
     integer*8                  :: countStart, countEnd, countRate, countMax
+    integer                    :: uid
+    logical                    :: saveDissMatrix, loadDissMatrix
     
     ! Read in argument list from arglist.lst file
     fu_in = 15
@@ -129,12 +131,49 @@
 
     ierr = nf90_close( ncId )
 
-    grid_ni = grid_ni / useFractionOfRegion
-    grid_nj = grid_nj / useFractionOfRegion
+    ! grid_ni = grid_ni / useFractionOfRegion
+    ! grid_nj = grid_nj / useFractionOfRegion
+    grid_ni = useFractionOfRegion
+    grid_nj = useFractionOfRegion
     numPoints = grid_ni * grid_nj
     
     write(*,*) 'dims', grid_ni, grid_nj, grid_nt
     write(*,*) 'numPoints = ', numPoints
+    
+    WRITE(dataFileName,107) trim(outDir), start_year, start_mon,     &
+         start_day, end_year, end_mon, end_day, forecastHour,  &
+         grid_ni, grid_nj
+    saveDissMatrix = .true.
+    WRITE(*,*) ' Checking if ', trim(dataFileName), ' exists...'
+    inquire(file=dataFileName, exist=loadDissMatrix)
+    IF ( loadDissMatrix ) THEN
+       WRITE(*,*) ' Yes. Loading dissimilarity matrix'
+       saveDissMatrix = .false.
+
+       WRITE(*,*) ' Allocating pQueue with len=', numPoints
+       ALLOCATE(PQueue(numPoints))
+       ALLOCATE(NODES(numPoints, numPoints,2))
+       ALLOCATE(LIVE(numPoints))
+       ALLOCATE(clusterSize(numPoints))
+       WRITE(*,*) ' Allocated'
+
+       uid = 15
+       OPEN(uid, file=trim(dataFileName), form='unformatted', status='old')
+       DO N = 1, numPoints
+          CALL PQueue(N)%INIT( int(numPoints,4), 2, GREATER1 )
+          DO I = 1, numPoints
+             READ(uid) R
+             
+             NODES(N,I,:) = (/ R, real(I,8) /)
+
+             CALL PQueue(N)%INSERT( NODES(N,I,:) )
+             LIVE(N) = .true.
+             clusterSize(N) = 1
+          ENDDO
+       ENDDO
+       CLOSE(UID)
+    ELSE
+       WRITE(*,*) ' No. Computing dissimilarity matrix'
 
     call SYSTEM_CLOCK( countStart, countRate, countMax )
     
@@ -190,18 +229,22 @@
           !$OMP PRIVATE( TRACER_TMP, GRIDI2 )    &
           !$OMP PRIVATE( GRIDJ2, TRACER_TMP2 )
           DO I = 1,numPoints
-             GRIDI = (I - 1) / GRID_NJ + 1
-             GRIDJ = (I - 1) - (GRIDI - 1) * GRID_NJ + 1
+             ! GRIDI = (I - 1) / GRID_NJ + 1
+             ! GRIDJ = (I - 1) - (GRIDI - 1) * GRID_NJ + 1
+             GRIDJ = (I - 1) / GRID_NJ + 1
+             GRIDI = (I - 1) - (GRIDJ - 1) * GRID_NJ + 1
              TRACER_TMP = BUFFER( GRIDI, GRIDJ )
              TRACER_SUM( I )   = TRACER_SUM( I )   + TRACER_TMP
              TRACER_SQSUM( I ) = TRACER_SQSUM( I ) + TRACER_TMP * TRACER_TMP
              DO J = 1,numPoints
-                   GRIDI2 = (J - 1) / GRID_NJ + 1
-                   GRIDJ2 = (J - 1) - ( GRIDI2 - 1 ) * GRID_NJ + 1
-                   TRACER_TMP2 = BUFFER( GRIDI2, GRIDJ2 )
-                
-                   TRACER_XYSUM( I, J ) = TRACER_XYSUM( I, J ) + &
-                        TRACER_TMP * TRACER_TMP2
+                ! GRIDI2 = (J - 1) / GRID_NJ + 1
+                ! GRIDJ2 = (J - 1) - ( GRIDI2 - 1 ) * GRID_NJ + 1
+                GRIDJ2 = (J - 1) / GRID_NJ + 1
+                GRIDI2 = (J - 1) - ( GRIDJ2 - 1 ) * GRID_NJ + 1
+                TRACER_TMP2 = BUFFER( GRIDI2, GRIDJ2 )
+
+                TRACER_XYSUM( I, J ) = TRACER_XYSUM( I, J ) + &
+                     TRACER_TMP * TRACER_TMP2
              ENDDO
           ENDDO
           !$OMP END PARALLEL DO
@@ -275,7 +318,7 @@
              IF (R > RMAX) RMAX = R
           ENDIF
 
-          NODES(N,I,:) = (/ 1d0 - R, real(I,8) /)
+          NODES(N,I,:) = (/ -1d0 * (1d0 - R), real(I,8) /)
 
           CALL PQueue(N)%INSERT( NODES(N,I,:) )
           LIVE(N) = .true.
@@ -284,16 +327,36 @@
        ENDDO
     ENDDO
     !$OMP END PARALLEL DO
+    call SYSTEM_CLOCK( countEnd, countRate, countMax )
 
     DEALLOCATE( TRACER_SUM )
     DEALLOCATE( TRACER_SQSUM )
     DEALLOCATE( TRACER_XYSUM )
 
-    call SYSTEM_CLOCK( countEnd, countRate, countMax )
+ ENDIF ! .not. loadDissimilarityMatrix
+
     WRITE(*,*) 'R ranged from ', RMIN, ' to ', RMAX
     WRITE(*,*) 'Calculating initial dissimilarity scores took ', &
          real(countEnd - countStart) / real(countRate), ' sec'
-    countStart = countEnd
+
+    if (saveDissMatrix) THEN
+       WRITE(*,*) 'Saving dissimilarity matrix...'
+       WRITE(dataFileName,107) trim(outDir), start_year, start_mon,     &
+            start_day, end_year, end_mon, end_day, forecastHour,  &
+            grid_ni, grid_nj
+107    FORMAT(a,i4.4,i2.2,i2.2, '_', i4.4,i2.2,i2.2,'_', i2.2, '_', &
+            i4.4, 'x', i4.4, '.bin')
+       open( uid, file=trim(dataFileName),form='unformatted')
+       DO N = 1,numPoints
+          DO I = 1,numPoints
+             WRITE(uid) NODES(N,I,1)
+          ENDDO
+       ENDDO
+       close(UID)
+       WRITE(*,*) 'Done.'
+    ENDIF
+    
+    call SYSTEM_CLOCK( countStart, countRate, countMax )
 
     ! Need to iterate this many times to get to a single cluster
     DO K = 1, numPoints-1
@@ -304,7 +367,7 @@
        DO I = 1,numPoints
           IF (.not. LIVE(I)) CYCLE
           call PQueue(I).PEEK( 1, NODE )
-          IF ( NODE(1) .lt. RMIN ) THEN
+          IF ( NODE(1) .le. RMIN ) THEN
              NODE1 = NODE
              RMIN = NODE1(1)
              K1 = I
@@ -335,9 +398,9 @@
           WRITE(*,104) k1, k2, NODE1(1)
        ENDIF
           
-104    FORMAT('Clustering ', i9, ' and ', i9, ' (1-R) = ', F8.6)
-105    FORMAT('Clustering ', i6, ' and ', i6, ' (1-R) = ', F8.6)
-106    FORMAT('Clustering ', i3, ' and ', i3, ' (1-R) = ', F8.6)
+104    FORMAT('Clustering ', i9, ' and ', i9, ' (1-R) = ', F9.6)
+105    FORMAT('Clustering ', i6, ' and ', i6, ' (1-R) = ', F9.6)
+106    FORMAT('Clustering ', i3, ' and ', i3, ' (1-R) = ', F9.6)
        
        LIVE(K2) = .false.
        call PQueue(K1)%CLEAR()
@@ -366,8 +429,9 @@
           ENDIF
           
           
-          R = (clusterSize(K1) * NODE1(1) + clusterSize(K2) * NODE2(1)) &
-               / ( clusterSize(K1) + clusterSize(K2) )
+          ! R = (clusterSize(K1) * NODE1(1) + clusterSize(K2) * NODE2(1)) &
+          !      / ( clusterSize(K1) + clusterSize(K2) )
+          R = MIN( NODE1(1), NODE2(1) )
 
           NODES( I,K1,1) = R
           NODES(K1, I,1) = R
@@ -381,7 +445,7 @@
        clusterSize(K2) = 0
     ENDDO
     call SYSTEM_CLOCK( countEnd, countRate, countMax )
-    WRITE(*,*) 'Clusering took ', &
+    WRITE(*,*) 'Clustering took ', &
          real(countEnd - countStart) / real(countRate), ' sec'
     countStart = countEnd
 

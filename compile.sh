@@ -16,13 +16,13 @@ set -x
 . ssmuse-sh -x hpco/exp/hdf5-netcdf4/parallel/openmpi-3.1.2/static/intel-19.0.3.199/01
 #
 
-# s.compile -src kz_hc_GEM-MACH_v24_read_clust_v3.f90 mheap.f90 -openmp -mpi  -librmn -libappl netcdff netcdf hdf5_hl hdf5 z curl irc
+s.compile -src kz_hc_GEM-MACH_v24_read_clust_v3.f90 -openmp -mpi  -librmn -libappl netcdff netcdf hdf5_hl hdf5 z curl irc
 
 s.compile -src mheap.f90 -openmp -mpi  -librmn -libappl netcdff netcdf hdf5_hl hdf5 z curl irc # -debug -strict -prof -O 0
 
 s.compile -src cluster_openmp.f90 -openmp -mpi -librmn -libappl netcdff netcdf hdf5_hl hdf5 z curl irc # -debug -strict -prof -O 0
 
-# s.compile -obj kz_hc_GEM-MACH_v24_read_clust_v3.o mheap.o -o kzCluster.abs -openmp -mpi  -librmn -libappl netcdff netcdf hdf5_hl hdf5 z curl irc
+s.compile -obj kz_hc_GEM-MACH_v24_read_clust_v3.o mheap.o -o kzCluster.abs -openmp -mpi  -librmn -libappl netcdff netcdf hdf5_hl hdf5 z curl irc
 
 s.compile -obj cluster_openmp.o mheap.o -o cluster_omp.abs -mpi -openmp -librmn -libappl netcdff netcdf hdf5_hl hdf5 z curl irc # -debug -strict -prof -O 0
 
