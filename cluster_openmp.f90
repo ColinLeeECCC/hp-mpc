@@ -144,6 +144,7 @@
          start_day, end_year, end_mon, end_day, forecastHour,  &
          grid_ni, grid_nj
     saveDissMatrix = .true.
+    uid = 15
     WRITE(*,*) ' Checking if ', trim(dataFileName), ' exists...'
     inquire(file=dataFileName, exist=loadDissMatrix)
     IF ( loadDissMatrix ) THEN
@@ -157,14 +158,13 @@
        ALLOCATE(clusterSize(numPoints))
        WRITE(*,*) ' Allocated'
 
-       uid = 15
        OPEN(uid, file=trim(dataFileName), form='unformatted', status='old')
        DO N = 1, numPoints
           CALL PQueue(N)%INIT( int(numPoints,4), 2, GREATER1 )
+          READ(uid) NODES(N,:,1)
           DO I = 1, numPoints
-             READ(uid) R
              
-             NODES(N,I,:) = (/ R, real(I,8) /)
+             NODES(N,I,2) = real(I,8)
 
              CALL PQueue(N)%INSERT( NODES(N,I,:) )
              LIVE(N) = .true.
@@ -348,9 +348,9 @@
             i4.4, 'x', i4.4, '.bin')
        open( uid, file=trim(dataFileName),form='unformatted')
        DO N = 1,numPoints
-          DO I = 1,numPoints
-             WRITE(uid) NODES(N,I,1)
-          ENDDO
+!          DO I = 1,numPoints
+             WRITE(uid) NODES(N,:,1)
+!          ENDDO
        ENDDO
        close(UID)
        WRITE(*,*) 'Done.'

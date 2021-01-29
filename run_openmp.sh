@@ -36,4 +36,4 @@ cd \${wrkDir}
 EOD
 # on ppp3 -cpus 40x1 -cm 5G gives only one node; as a workaround use -cpus 44x44 -cm 210G
 
-ord_soumet jobscript.sh -mach eccc-ppp3 -cpus 1x1x40 -cm 160G -waste 90 -w ${WTIME} -mpi -jn colin_serial -listing /space/hall3/sitestore/eccc/aq/r1/cle001/src/parallel/listings
+ord_soumet jobscript.sh -mach eccc-ppp3 -cpus 1x1x40 -cm 160G -waste 90 -w ${WTIME} -mpi -jn colin_omp -listing /space/hall3/sitestore/eccc/aq/r1/cle001/src/parallel/listings

@@ -182,7 +182,7 @@
       read(metricS,'(i)') mtype
       !call getarg(3,istdS)
       !read(istdS,'(i)') istd
-      is = 1                  ! similarity vs dissimilarity
+      is = -1                  ! similarity vs dissimilarity
       if (mtype == 3) is = -1
       call getarg(3,itmpS)
       read(itmpS,'(i)') itmp  ! clustering method
@@ -227,7 +227,7 @@
       fcst_hr = 18
       header = 'GEM-MACH Oil sans run between 09.2013-08.2014'
       date2julianS = (/2013,08,1,fcst_hr,00,00,00,00/)
-      date2julianE = (/2013,08,29,fcst_hr,00,00,00,00/)
+      date2julianE = (/2014,07,31,fcst_hr,00,00,00,00/)
       call d2j(date2julianS,jDayS,err)
       call d2j(date2julianE,jDayE,err)
       nts = int((jDayE-jDayS+1)*24)
@@ -333,11 +333,23 @@
                       -1, '',ip1t_surface, -1, -1, '', bggrid_def_field)
          deallocate(varbg)
          igc = 0
-         nst2 = floor(sqrt(real(nst))*0.5)
-         iIni = i_stack-nst2
-         iEnd = i_stack+nst2
-         jIni = j_stack-nst2
-         jEnd = j_stack+nst2
+         ! nst2 = floor(sqrt(real(nst))*0.5)
+         ! iIni = i_stack-nst2
+         ! iEnd = i_stack+nst2
+         ! jIni = j_stack-nst2
+         ! jEnd = j_stack+nst2
+
+         ! Hard coding values for comparison for now
+         nst2 = 8
+         nst  = 64
+         nCells = map(nst,nst-1,nst) 
+         iIni = 1
+         jIni = 1
+         iEnd = 64
+         jEnd = 64
+         write(nstS,'(i10)') nst
+         nstS = adjustl(nstS)
+         
          allocate(id(nst)) !i_array(nst),j_array(nst))
          ! write(6,*) 'id(igc),i_array(igc),j_array(igc)'
 !         do j = jIni,jEnd
@@ -349,8 +361,8 @@
 !            write(6,*) id(igc),i_array(igc),j_array(igc)
 !          end do
 !        end do          
-         do j = -nst2,nst2
-           do i = -nst2,nst2
+         do j = 1,nst2
+           do i = 1,nst2
              igc = igc+1
                id(igc) = igc
                !i_array(igc) = (i_stack+i) * 1.0
@@ -401,8 +413,8 @@
              ier = fstlir(varbg(:,:), fu_bg, ni_bidon, nj_bidon, nk_bidon, &
                           -1, '', ip1t_surface, -1, -1, '', varbg_name)
              igc = 0
-             do j = -nst2,nst2 !jIni,jEnd
-               do i = -nst2,nst2 !iIni,iEnd
+             do j = 1,nst2 !jIni,jEnd
+               do i = 1,nst2 !iIni,iEnd
                  igc=igc+1
                  data_st(igc,ict) = varbg(i_stack+i,j_stack+j) !varbg(i,j)
 !                 write(6,*) 'igc,ict,varbg(i,j)',igc,ict,varbg(i,j)
@@ -427,7 +439,7 @@
          WRITE(*,*) ' done transposing data_st'
          deallocate(data_st)
          call dtime(end_task)
-         write(6,*) 'time to read data:',end_task(1)-start_task(1),end_task(2)-start_task(2)
+         write(6,*) 'time to read data:',end_task(1),end_task(2)
 !        ### save data
          outFNmDataIn = trim(outFNmData)//trim(nstS)//'gc.bin'
          open(unit=31,file=trim(outFNmDataIn),form='unformatted', &
@@ -459,7 +471,7 @@
                  end if
                  call dtime(end_task)
                  write(6,*) 'compute distance matrix running time', &
-                            end_task(1)-start_task(1),end_task(2)-start_task(2)
+                            end_task(1),end_task(2)
                end if ! distMatrix_not_available
 !!  Cluster and recompute the metric; save the parameters lkj,lki,lk,xx          
                call dtime(start_task)
@@ -469,7 +481,7 @@
                ! end if
                call dtime(end_task)
                write(6,*) 'compute clustering running time', &
-                          end_task(1)-start_task(1),end_task(2)-start_task(2)
+                          end_task(1),end_task(2)
              end if ! clusters_not_available
 !!  Compute centroids if not available, save the parameters cluster_table      
              call dtime(start_task)
@@ -478,7 +490,7 @@
                                     iclus1,iclus2,outFNm,nstS)
              call dtime(end_task)
              write(6,*) 'compute centroids running time', &
-                         end_task(1)-start_task(1),end_task(2)-start_task(2)
+                         end_task(1),end_task(2)
            end if !# if centroid_available
 !! Write the output          
            call dtime(start_task)
@@ -491,7 +503,7 @@
                              latPS,lonPS,ip1t_surface,fhr)
            call dtime(end_task)
            write(6,*) 'write output running time', &
-                        end_task(1)-start_task(1),end_task(2)-start_task(2)
+                        end_task(1),end_task(2)
          else ! kz > 001
 !! time series will be fitered and then clustered
 ! Filter out (100% removal) all time signals with < 1 day duration, 50% pass on 2.75 day duration
