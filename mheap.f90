@@ -51,7 +51,6 @@ TYPE :: THEAP
    PROCEDURE :: PEEK    => HEAP_PEEK
    PROCEDURE :: POP     => HEAP_POP
    PROCEDURE :: DELETE  => HEAP_DELETE
-   PROCEDURE :: REHEAP  => HEAP_REHEAP
    PROCEDURE :: SIZE    => HEAP_SIZE
    PROCEDURE :: CLEAR   => HEAP_RESET
    FINAL     :: HEAP_RELEASE
@@ -163,55 +162,37 @@ CONTAINS
 
    END SUBROUTINE HEAP_POP
 
-   RECURSIVE SUBROUTINE HEAP_DELETE( HEAP, NODE, KSTART, DONE)                  
-      ! Retrieve the root element off the heap. The resulting tree is re-heaped.
-      ! No data is deleted, thus the original 
+   SUBROUTINE HEAP_DELETE( HEAP, NODE )                  
+      ! Find a node and delete it, reheaping the tree in the process
       !   input
       !        heap - the heap 
-      !   output 
-      !        node - the deleted node 
+      !        node - the node to be deleted
       CLASS(THEAP) :: HEAP
       DOUBLE PRECISION :: NODE( HEAP%NLEN )
-      INTEGER, OPTIONAL :: KSTART, DONE
-      INTEGER           :: I, K, IL, IR, DTMP
+      INTEGER           :: I, K1, K2, IL, IR
 
       IF( HEAP%N .EQ. 0 ) RETURN
-
-      K = 1
-      IF (PRESENT( KSTART )) K = KSTART
-
+      
       ! IF (K .eq. 1) WRITE(*,'(A,i2)') 'N = ', HEAP%N
-      ! WRITE(*,101) K, HEAP%DATA(:,HEAP%INDX(K))
 101   FORMAT('Checking if ', i2, ', ', F5.3, ', ', F5.3, ' is our node')
-      ! if the root node has our value, we can skip the search
-      IF ( ALL( HEAP%DATA(:,HEAP%INDX(K)) .eq. NODE ) ) THEN
-         I = K
-      
-         ! WRITE(*,*) 'Deleting node ', I, ': ', HEAP%DATA(:,HEAP%INDX(I))
-      
-         CALL SWAPINT( HEAP%INDX(I), HEAP%INDX(HEAP%N) )
-      
-         HEAP%N = HEAP%N - 1
 
-         CALL HEAP_GROW( HEAP, I )
+      DO I = 1,HEAP%N
+         ! WRITE(*,101) I, HEAP%DATA(:,HEAP%INDX(I))
+         ! if the root node has our value, we can skip the search
+         IF ( ALL( HEAP%DATA(:,HEAP%INDX(I)) .eq. NODE ) ) THEN
+            ! WRITE(*,*) 'Deleting node ', I, ': ', HEAP%DATA(:,HEAP%INDX(I))
 
-         IF (PRESENT( DONE ) ) DONE = 1
-      ELSEIF ( K*2 .LE. HEAP%N ) THEN
-         IL = K*2
-         IR = K*2 + 1
-         DTMP = 0
-         CALL HEAP%DELETE(NODE, IL, DTMP )
-         ! WRITE(*,102) IL, DTMP
-102      FORMAT('Back from delete ', i2, ', done = ', i1)
-         IF ( DTMP .eq. 1 ) THEN
-            IF (PRESENT( DONE ) ) DONE = DTMP
-         ELSEIF (IR .LE. HEAP%N) THEN
-            CALL HEAP%DELETE(NODE, IR)
-            IF (PRESENT( DONE ) ) DONE = DTMP
+            CALL SWAPINT( HEAP%INDX(I), HEAP%INDX(HEAP%N) )
+
+            HEAP%N = HEAP%N - 1
+
+            IF ( I .LT. HEAP% N ) THEN
+               CALL HEAP_GROW( HEAP, I )
+            END IF
+            RETURN
          ENDIF
-      ELSE
-         ! WRITE(*,*) 'Traversed to the end and didn''t find it'
-      ENDIF
+      ENDDO
+      WRITE(*,*) 'Traversed to the end and didn''t find it'
 
    END SUBROUTINE HEAP_DELETE
 
@@ -263,27 +244,6 @@ CONTAINS
       ENDDO
 
    END SUBROUTINE HEAP_GROW
-
-   SUBROUTINE HEAP_REHEAP(HEAP,HPFUN)                   
-      ! Builds the heap from the element data using the provided heap function.
-      ! At exit, the root node satisfies the heap condition:
-      !   HPFUN( ROOT_NODE, NODE ) = .true. for any other NODE 
-      ! 
-      CLASS(THEAP)                 :: HEAP
-      PROCEDURE(HEAPFUN), OPTIONAL :: HPFUN
-      INTEGER                      :: K
-
-      HEAP%N   = HEAP%M
-      IF( PRESENT( HPFUN ) ) THEN
-         HEAP%FUN => HPFUN 
-      ENDIF
-
-      IF(HEAP%NMAX .LT. HEAP%N) RETURN
-
-      DO K = HEAP%N / 2, 1, -1
-         CALL HEAP_GROW(HEAP,K) 
-      ENDDO
-   END SUBROUTINE HEAP_REHEAP
 
    SUBROUTINE SWAPINT( I, K )
       INTEGER :: I, K, T
