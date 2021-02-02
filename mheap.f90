@@ -162,37 +162,61 @@ CONTAINS
 
    END SUBROUTINE HEAP_POP
 
-   SUBROUTINE HEAP_DELETE( HEAP, NODE )                  
+   SUBROUTINE HEAP_DELETE( HEAP, NODE, K )                  
       ! Find a node and delete it, reheaping the tree in the process
       !   input
       !        heap - the heap 
       !        node - the node to be deleted
-      CLASS(THEAP) :: HEAP
-      DOUBLE PRECISION :: NODE( HEAP%NLEN )
-      INTEGER           :: I, K1, K2, IL, IR
-
-      IF( HEAP%N .EQ. 0 ) RETURN
+      CLASS(THEAP)              :: HEAP
+      DOUBLE PRECISION,OPTIONAL :: NODE( HEAP%NLEN )
+      INTEGER, OPTIONAL         :: K
+      INTEGER                   :: I,K1
       
-      ! IF (K .eq. 1) WRITE(*,'(A,i2)') 'N = ', HEAP%N
-101   FORMAT('Checking if ', i2, ', ', F5.3, ', ', F5.3, ' is our node')
+      IF( HEAP%N .EQ. 0 ) RETURN
 
-      DO I = 1,HEAP%N
-         ! WRITE(*,101) I, HEAP%DATA(:,HEAP%INDX(I))
-         ! if the root node has our value, we can skip the search
-         IF ( ALL( HEAP%DATA(:,HEAP%INDX(I)) .eq. NODE ) ) THEN
-            ! WRITE(*,*) 'Deleting node ', I, ': ', HEAP%DATA(:,HEAP%INDX(I))
+102   FORMAT('Deleting ', i2, ': ', F5.3, ', ', F5.3)
 
-            CALL SWAPINT( HEAP%INDX(I), HEAP%INDX(HEAP%N) )
+      ! WRITE(*,*) ' In HEAP_DELETE. K? ', PRESENT(K), 'NODE?', PRESENT(NODE)
 
-            HEAP%N = HEAP%N - 1
+      IF ( PRESENT( K ) ) THEN
+         ! By using INDX(K) we should be able to follow
+         ! the nodes as they're swapped around in the
+         ! insert and delete operations
+         K1 = HEAP%INDX(K)
+         ! WRITE(*,102) K1, HEAP%DATA(:,HEAP%INDX(K1))
 
-            IF ( I .LT. HEAP% N ) THEN
-               CALL HEAP_GROW( HEAP, I )
-            END IF
+      ELSE
+         K1 = -1
+         ! WRITE(*,*) 'K1 = ', K1
+
+101      FORMAT('Checking if ', i2, ', ', F5.3, ', ', F5.3, ' is our node')
+
+         DO I = 1,HEAP%N
+            ! WRITE(*,101) I, HEAP%DATA(:,HEAP%INDX(I))
+            ! if the root node has our value, we can skip the search
+            IF ( ALL( HEAP%DATA(:,HEAP%INDX(I)) .eq. NODE ) ) THEN
+               ! WRITE(*,*) 'Deleting node ', I, ': ', HEAP%DATA(:,HEAP%INDX(I))
+               K1 = I
+               EXIT
+            ENDIF
+         ENDDO
+
+         IF ( K1 .eq. -1 ) THEN
+            WRITE(*,*) 'Traversed to the end and didn''t find it'
             RETURN
          ENDIF
-      ENDDO
-      WRITE(*,*) 'Traversed to the end and didn''t find it'
+         
+         ! WRITE(*,102) K1, HEAP%DATA(:,HEAP%INDX(K1))
+      ENDIF
+
+      ! WRITE(*,*) ' Swapping ', K1, ' and ', HEAP%N
+      CALL SWAPINT( HEAP%INDX(K1), HEAP%INDX(HEAP%N) )
+
+      HEAP%N = HEAP%N - 1
+
+      IF ( I .LT. HEAP% N ) THEN
+         CALL HEAP_GROW( HEAP, K1 )
+      END IF
 
    END SUBROUTINE HEAP_DELETE
 

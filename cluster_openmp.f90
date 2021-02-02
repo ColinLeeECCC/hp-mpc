@@ -64,6 +64,8 @@
                                :: live
     integer,allocatable,dimension(:) &
                                :: clusterSize
+    integer,allocatable,dimension(:,:) &
+                               :: heapIdx
     real*8                     :: NODE(2), NODE1(2), NODE2(2)
 
     integer                    :: I, J, K, N, M
@@ -156,6 +158,7 @@
        ALLOCATE(NODES(numPoints, numPoints,2))
        ALLOCATE(LIVE(numPoints))
        ALLOCATE(clusterSize(numPoints))
+       ALLOCATE(heapIdx(numPoints,numPoints))
        WRITE(*,*) ' Allocated'
 
        OPEN(uid, file=trim(dataFileName), form='unformatted', status='old')
@@ -163,13 +166,15 @@
           CALL PQueue(N)%INIT( int(numPoints,4), 2, GREATER1 )
           READ(uid) NODES(N,:,1)
           DO I = 1, numPoints
+             IF (N .eq. I) CYCLE
              
              NODES(N,I,2) = real(I,8)
 
              CALL PQueue(N)%INSERT( NODES(N,I,:) )
-             LIVE(N) = .true.
-             clusterSize(N) = 1
+             heapIdx(N,I) = PQueue(N)%SIZE()
           ENDDO
+          LIVE(N) = .true.
+          clusterSize(N) = 1
        ENDDO
        CLOSE(UID)
     ELSE
@@ -321,10 +326,11 @@
           NODES(N,I,:) = (/ -1d0 * (1d0 - R), real(I,8) /)
 
           CALL PQueue(N)%INSERT( NODES(N,I,:) )
-          LIVE(N) = .true.
-          clusterSize(N) = 1
-
+          heapIdx(N,I) = PQueue(N)%SIZE()
        ENDDO
+       LIVE(N) = .true.
+       clusterSize(N) = 1
+
     ENDDO
     !$OMP END PARALLEL DO
     call SYSTEM_CLOCK( countEnd, countRate, countMax )
@@ -415,14 +421,16 @@
           
           NODE1(:) = NODES(I,K1,:)
           M = PQueue(I)%SIZE()
-          call PQueue(I)%DELETE( NODE1 )
+          ! call PQueue(I)%DELETE( NODE1 )
+          call PQueue(I)%DELETE( K=heapIdx(I,K1) )
           IF (M - PQueue(I)%SIZE() .ne. 1) THEN
              WRITE(*,*) ' Failed to delete node1 ', NODE1, ' from queue ', I
              WRITE(*,*) ' M = ', M, ' size = ', PQueue(I)%SIZE()
           ENDIF
           NODE2(:) = NODES(I,K2,:)
           M = PQueue(I)%SIZE()
-          call PQueue(I)%DELETE( NODE2 )
+          ! call PQueue(I)%DELETE( NODE2 )
+          call PQueue(I)%DELETE( K=heapIdx(K1,I) )
           IF (M - PQueue(I)%SIZE() .ne. 1)  THEN
              WRITE(*,*) ' Failed to delete node2 ', NODE2, ' from queue ', I
              WRITE(*,*) ' M = ', M, ' size = ', PQueue(I)%SIZE()
@@ -436,8 +444,10 @@
           NODES( I,K1,1) = R
           NODES(K1, I,1) = R
           call PQueue( I)%INSERT( NODES( I,K1,:) )
+          heapIdx( I,K1) = PQueue(I)%SIZE()
           !$OMP CRITICAL
           call PQueue(K1)%INSERT( NODES(K1, I,:) )
+          heapIdx(K1,I) = PQueue(K1)%SIZE()
           !$OMP END CRITICAL
        ENDDO
        !$OMP END PARALLEL DO
