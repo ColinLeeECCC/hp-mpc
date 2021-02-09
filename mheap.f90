@@ -44,6 +44,7 @@ TYPE :: THEAP
    INTEGER                             :: NLEN      ! NODE SIZE IN DOUBLE PRECISION UNITS
    DOUBLE PRECISION, ALLOCATABLE       :: DATA(:,:) ! NODE DATA
    INTEGER, ALLOCATABLE                :: INDX(:)   ! NODES INDEX
+   INTEGER, ALLOCATABLE                :: LOCN(:)   ! NODES LOCATION INDEX
    PROCEDURE(HEAPFUN), NOPASS, POINTER :: FUN       ! HEAP FUNCTION TO FIND ROOT NODE
    CONTAINS
    PROCEDURE :: INIT    => HEAP_INIT
@@ -53,6 +54,7 @@ TYPE :: THEAP
    PROCEDURE :: DELETE  => HEAP_DELETE
    PROCEDURE :: SIZE    => HEAP_SIZE
    PROCEDURE :: CLEAR   => HEAP_RESET
+   PROCEDURE :: INDEXAT => HEAP_INDEXAT
    FINAL     :: HEAP_RELEASE
 END TYPE THEAP
 
@@ -79,6 +81,7 @@ CONTAINS
       HEAP%NLEN = NLEN
       HEAP%FUN  => HPFUN
       ALLOCATE( HEAP%INDX(NMAX)      )
+      ALLOCATE( HEAP%LOCN(NMAX)      )
       ALLOCATE( HEAP%DATA(NLEN,NMAX) )
       DO I = 1, NMAX
          HEAP%INDX(I)=I
@@ -107,7 +110,7 @@ CONTAINS
       HEAP%FUN  => NULL()
    END SUBROUTINE HEAP_RELEASE                          
 
-   SUBROUTINE HEAP_INSERT(HEAP,NODE)         
+   SUBROUTINE HEAP_INSERT(HEAP,NODE,K)
       ! Insert a node into a heap. The resulting tree is re-heaped.
       !  input
       !        heap - the heap 
@@ -115,6 +118,7 @@ CONTAINS
       !               contains the node's information to be inserted.
       CLASS(THEAP) :: HEAP
       DOUBLE PRECISION, INTENT(IN) :: NODE(HEAP%NLEN)
+      INTEGER,OPTIONAL,INTENT(OUT) :: K
 
       INTEGER :: I, K1, K2, IL, IR
 
@@ -124,6 +128,10 @@ CONTAINS
       HEAP%N = HEAP%N + 1
       HEAP%M = HEAP%M + 1
       HEAP%DATA(:,HEAP%INDX(HEAP%N)) = NODE(:)
+      IF (PRESENT(K)) THEN
+         K = HEAP%INDX(HEAP%N)
+      ENDIF
+      HEAP%LOCN(HEAP%INDX(HEAP%N)) = HEAP%N
 
       ! Re-index the heap from the bottom up
       K2 = HEAP%N
@@ -132,6 +140,7 @@ CONTAINS
          IR = HEAP%INDX(K2) 
          IL = HEAP%INDX(K1) 
          IF( HEAP%FUN( HEAP%DATA(:,IL), HEAP%DATA(:,IR) ) ) RETURN
+         CALL SWAPINT( HEAP%LOCN(HEAP%INDX(K2)), HEAP%LOCN(HEAP%INDX(K1)) )
          CALL SWAPINT( HEAP%INDX(K2), HEAP%INDX(K1) )
          K2 = K2 / 2
       ENDDO
@@ -154,6 +163,7 @@ CONTAINS
          NODE(:) = HEAP%DATA(:,HEAP%INDX(1))
       ENDIF
 
+      CALL SWAPINT( HEAP%LOCN(HEAP%INDX(1)), HEAP%LOCN(HEAP%INDX(HEAP%N)) )
       CALL SWAPINT( HEAP%INDX(1), HEAP%INDX(HEAP%N) )
       
       HEAP%N = HEAP%N - 1
@@ -162,19 +172,33 @@ CONTAINS
 
    END SUBROUTINE HEAP_POP
 
-   SUBROUTINE HEAP_DELETE( HEAP, NODE, K )                  
+   FUNCTION HEAP_INDEXAT( HEAP, K )
+     ! get the current index of the node inserted at K...?
+     ! input
+     !       heap - the heap
+     !       K    - the index you want to dereference
+     CLASS(THEAP)               :: HEAP
+     INTEGER                    :: K
+     INTEGER                    :: HEAP_INDEXAT
+
+     HEAP_INDEXAT = HEAP%LOCN(K)
+
+     RETURN
+   END FUNCTION HEAP_INDEXAT
+   
+   SUBROUTINE HEAP_DELETE( HEAP, NODE, K, DNODE, DK )                  
       ! Find a node and delete it, reheaping the tree in the process
       !   input
       !        heap - the heap 
       !        node - the node to be deleted
       CLASS(THEAP)              :: HEAP
-      DOUBLE PRECISION,OPTIONAL :: NODE( HEAP%NLEN )
-      INTEGER, OPTIONAL         :: K
+      DOUBLE PRECISION,OPTIONAL :: NODE( HEAP%NLEN ), DNODE(HEAP%NLEN)
+      INTEGER, OPTIONAL         :: K,DK
       INTEGER                   :: I,K1
       
       IF( HEAP%N .EQ. 0 ) RETURN
 
-102   FORMAT('Deleting ', i2, ': ', F5.3, ', ', F5.3)
+102   FORMAT('Deleting ', i2, ': ', F6.3, ', ', F5.1)
 
       ! WRITE(*,*) ' In HEAP_DELETE. K? ', PRESENT(K), 'NODE?', PRESENT(NODE)
 
@@ -182,8 +206,8 @@ CONTAINS
          ! By using INDX(K) we should be able to follow
          ! the nodes as they're swapped around in the
          ! insert and delete operations
-         K1 = HEAP%INDX(K)
-         ! WRITE(*,102) K1, HEAP%DATA(:,HEAP%INDX(K1))
+         K1 = HEAP%LOCN(K)
+         ! WRITE(*,102) K1, HEAP%DATA(1:2,HEAP%INDX(K1))
 
       ELSE
          K1 = -1
@@ -195,7 +219,7 @@ CONTAINS
             ! WRITE(*,101) I, HEAP%DATA(:,HEAP%INDX(I))
             ! if the root node has our value, we can skip the search
             IF ( ALL( HEAP%DATA(:,HEAP%INDX(I)) .eq. NODE ) ) THEN
-               ! WRITE(*,*) 'Deleting node ', I, ': ', HEAP%DATA(:,HEAP%INDX(I))
+!               WRITE(*,102) I, HEAP%DATA(1:2,HEAP%INDX(I))
                K1 = I
                EXIT
             ENDIF
@@ -209,12 +233,18 @@ CONTAINS
          ! WRITE(*,102) K1, HEAP%DATA(:,HEAP%INDX(K1))
       ENDIF
 
+      IF ( PRESENT(DNODE) ) THEN
+         DNODE(:) = HEAP%DATA(:,HEAP%INDX(K1))
+      ENDIF
+      IF ( PRESENT(DK) ) THEN
+         DK = K1
+      ENDIF
       ! WRITE(*,*) ' Swapping ', K1, ' and ', HEAP%N
+      CALL SWAPINT( HEAP%LOCN(HEAP%INDX(K1)), HEAP%LOCN(HEAP%INDX(HEAP%N)) )
       CALL SWAPINT( HEAP%INDX(K1), HEAP%INDX(HEAP%N) )
-
       HEAP%N = HEAP%N - 1
 
-      IF ( I .LT. HEAP% N ) THEN
+      IF ( K1 .LT. HEAP% N ) THEN
          CALL HEAP_GROW( HEAP, K1 )
       END IF
 
@@ -260,7 +290,8 @@ CONTAINS
          IL    = HEAP%INDX(K) 
          IR    = HEAP%INDX(I) 
          IF( HEAP%FUN(HEAP%DATA(:,IL),HEAP%DATA(:,IR)) ) RETURN
-         
+
+         CALL SWAPINT( HEAP%LOCN(HEAP%INDX(I)), HEAP%LOCN(HEAP%INDX(K)) )
          CALL SWAPINT( HEAP%INDX(I), HEAP%INDX(K) )
          
          K = I

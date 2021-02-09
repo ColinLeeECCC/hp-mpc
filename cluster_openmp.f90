@@ -170,8 +170,7 @@
              
              NODES(N,I,2) = real(I,8)
 
-             CALL PQueue(N)%INSERT( NODES(N,I,:) )
-             heapIdx(N,I) = PQueue(N)%SIZE()
+             CALL PQueue(N)%INSERT( NODES(N,I,:), heapIdx(N, I) )
           ENDDO
           LIVE(N) = .true.
           clusterSize(N) = 1
@@ -277,6 +276,7 @@
     ALLOCATE(NODES(numPoints, numPoints,2))
     ALLOCATE(LIVE(numPoints))
     ALLOCATE(clusterSize(numPoints))
+    ALLOCATE(heapIdx(numPoints,numPoints))
     WRITE(*,*) ' Allocated'
 
     ! I have an inkling that doing this in the OMP loop is causing
@@ -325,8 +325,7 @@
 
           NODES(N,I,:) = (/ -1d0 * (1d0 - R), real(I,8) /)
 
-          CALL PQueue(N)%INSERT( NODES(N,I,:) )
-          heapIdx(N,I) = PQueue(N)%SIZE()
+          CALL PQueue(N)%INSERT( NODES(N,I,:), heapIdx(N,I) )
        ENDDO
        LIVE(N) = .true.
        clusterSize(N) = 1
@@ -414,23 +413,42 @@
        !$OMP PARALLEL DO                    &
        !$OMP DEFAULT( SHARED )              &
        !$OMP PRIVATE( I, NODE1, NODE2)      &
-       !$OMP PRIVATE( M, R )
+       !$OMP PRIVATE( M, R, N, J )
        DO I = 1,numPoints
           IF (.not. LIVE(I)) CYCLE
           IF (I .eq. K1) CYCLE
-          
+
+          J = PQueue(I)%IndexAt( heapIdx(I,K1) )
+          call PQueue(I)%PEEK( J, NODE )
           NODE1(:) = NODES(I,K1,:)
           M = PQueue(I)%SIZE()
-          ! call PQueue(I)%DELETE( NODE1 )
-          call PQueue(I)%DELETE( K=heapIdx(I,K1) )
+          ! call PQueue(I)%DELETE( NODE1, DNODE=NODE2, DK=N )
+          call PQueue(I)%DELETE( K=heapIdx(I,K1), DNODE=NODE2 )
+115       FORMAT('Trying to delete ', i4, ',', i4,' (', f6.3, ',',&
+               f4.0,') but deleted (', f6.3, ',', f4.0, ')')
+!           IF (N .ne. J) THEN
+!              WRITE(*,'(a,i4,a,i4)') ' Trying to delete node ', J, &
+!                   ', but got ', N
+! 116          FORMAT('NODE', i1, ' = ', f6.3, ', ', i4)
+!              WRITE(*,116), 1, NODE1(1), INT(NODE1(2))
+!              WRITE(*,116)  2, NODE2(1), INT(NODE2(2))
+!              WRITE(*, 116), 0, NODE(1), INT(NODE(2))
+!           ENDIF
+          IF (.not. ALL( NODE2 .eq. NODE1 ) ) THEN
+             WRITE(*,115) I, K1, NODE1, NODE2
+             STOP 1
+          ENDIF
           IF (M - PQueue(I)%SIZE() .ne. 1) THEN
              WRITE(*,*) ' Failed to delete node1 ', NODE1, ' from queue ', I
              WRITE(*,*) ' M = ', M, ' size = ', PQueue(I)%SIZE()
           ENDIF
           NODE2(:) = NODES(I,K2,:)
           M = PQueue(I)%SIZE()
-          ! call PQueue(I)%DELETE( NODE2 )
-          call PQueue(I)%DELETE( K=heapIdx(K1,I) )
+          ! call PQueue(I)%DELETE( NODE2, DNODE=NODE1 )
+          call PQueue(I)%DELETE( K=heapIdx(I, K2), DNODE=NODE1 )
+          IF (.not. ALL( NODE2 .eq. NODE1)) THEN
+             WRITE(*,115) I, K2, NODE2, NODE1
+          ENDIF
           IF (M - PQueue(I)%SIZE() .ne. 1)  THEN
              WRITE(*,*) ' Failed to delete node2 ', NODE2, ' from queue ', I
              WRITE(*,*) ' M = ', M, ' size = ', PQueue(I)%SIZE()
@@ -443,11 +461,9 @@
 
           NODES( I,K1,1) = R
           NODES(K1, I,1) = R
-          call PQueue( I)%INSERT( NODES( I,K1,:) )
-          heapIdx( I,K1) = PQueue(I)%SIZE()
+          call PQueue( I)%INSERT( NODES( I,K1,:), heapIdx( I, K1 ) )
           !$OMP CRITICAL
-          call PQueue(K1)%INSERT( NODES(K1, I,:) )
-          heapIdx(K1,I) = PQueue(K1)%SIZE()
+          call PQueue(K1)%INSERT( NODES(K1, I,:), heapIdx(K1,  I ) )
           !$OMP END CRITICAL
        ENDDO
        !$OMP END PARALLEL DO
