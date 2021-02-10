@@ -72,7 +72,7 @@
     integer                    :: IDAY, IHR, HRS_SINCE_START
     integer                    :: ierr
 
-    real*8                     :: R, RMIN, RMAX, Nt
+    real*8                     :: R, RMIN, RMAX, RTMP, Nt
 
     integer*8                  :: countStart, countEnd, countRate, countMax
     integer                    :: uid
@@ -149,6 +149,9 @@
     uid = 15
     WRITE(*,*) ' Checking if ', trim(dataFileName), ' exists...'
     inquire(file=dataFileName, exist=loadDissMatrix)
+
+    call SYSTEM_CLOCK( countStart, countRate, countMax )
+    
     IF ( loadDissMatrix ) THEN
        WRITE(*,*) ' Yes. Loading dissimilarity matrix'
        saveDissMatrix = .false.
@@ -161,6 +164,9 @@
        ALLOCATE(heapIdx(numPoints,numPoints))
        WRITE(*,*) ' Allocated'
 
+       RMIN = 999d99
+       RMAX = -999d99
+
        OPEN(uid, file=trim(dataFileName), form='unformatted', status='old')
        DO N = 1, numPoints
           CALL PQueue(N)%INIT( int(numPoints,4), 2, GREATER1 )
@@ -172,15 +178,36 @@
 
              CALL PQueue(N)%INSERT( NODES(N,I,:), heapIdx(N, I) )
           ENDDO
+
+          IF (N .eq. 1) THEN
+             RTMP = MINVAL( NODES(N,2:numPoints,1) )
+          ELSEIF (N .eq. numPoints) THEN
+             RTMP = MINVAL( NODES(N,1:numPoints-1,1) )
+          ELSE
+             RTMP = MIN( MINVAL( NODES(N,1:(N-1), 1) ), &
+                  MINVAL( NODES(N, (N+1):numPoints,1) ) )
+          ENDIF
+          IF (RTMP < RMIN) &
+               RMIN = RTMP
+          IF (N .eq. 1) THEN
+             RTMP = MAXVAL( NODES(N,2:numPoints,1) )
+          ELSEIF (N .eq. numPoints) THEN
+             RTMP = MAXVAL( NODES(N,1:numPoints-1,1) )
+          ELSE
+             RTMP = MAX( MAXVAL( NODES(N,1:(N-1), 1) ), &
+                  MAXVAL( NODES(N, (N+1):numPoints,1 ) ) )
+          ENDIF
+          IF (RTMP > RMAX) &
+               RMAX = RTMP
+          
           LIVE(N) = .true.
           clusterSize(N) = 1
        ENDDO
        CLOSE(UID)
+       RMIN = MINVAL( NODES(:,:,1) )
     ELSE
        WRITE(*,*) ' No. Computing dissimilarity matrix'
 
-    call SYSTEM_CLOCK( countStart, countRate, countMax )
-    
     ! read in all the time data from start to end
     start_vec = (/start_year,start_mon,start_day,forecastHour,00,00,00,00/)
     end_vec   = (/end_year,    end_mon,  end_day,forecastHour,00,00,00,00/)
@@ -413,29 +440,21 @@
        !$OMP PARALLEL DO                    &
        !$OMP DEFAULT( SHARED )              &
        !$OMP PRIVATE( I, NODE1, NODE2)      &
-       !$OMP PRIVATE( M, R, N, J )
+       !$OMP PRIVATE( M, R, N, J, NODE )
        DO I = 1,numPoints
           IF (.not. LIVE(I)) CYCLE
           IF (I .eq. K1) CYCLE
 
-          J = PQueue(I)%IndexAt( heapIdx(I,K1) )
-          call PQueue(I)%PEEK( J, NODE )
+          ! J = PQueue(I)%IndexAt( heapIdx(I,K1) )
+          ! call PQueue(I)%PEEK( J, NODE )
           NODE1(:) = NODES(I,K1,:)
           M = PQueue(I)%SIZE()
-          ! call PQueue(I)%DELETE( NODE1, DNODE=NODE2, DK=N )
-          call PQueue(I)%DELETE( K=heapIdx(I,K1), DNODE=NODE2 )
+          ! call PQueue(I)%DELETE( NODE1, DNODE=NODE, DK=N )
+          call PQueue(I)%DELETE( K=heapIdx(I,K1), DNODE=NODE )
 115       FORMAT('Trying to delete ', i4, ',', i4,' (', f6.3, ',',&
                f4.0,') but deleted (', f6.3, ',', f4.0, ')')
-!           IF (N .ne. J) THEN
-!              WRITE(*,'(a,i4,a,i4)') ' Trying to delete node ', J, &
-!                   ', but got ', N
-! 116          FORMAT('NODE', i1, ' = ', f6.3, ', ', i4)
-!              WRITE(*,116), 1, NODE1(1), INT(NODE1(2))
-!              WRITE(*,116)  2, NODE2(1), INT(NODE2(2))
-!              WRITE(*, 116), 0, NODE(1), INT(NODE(2))
-!           ENDIF
-          IF (.not. ALL( NODE2 .eq. NODE1 ) ) THEN
-             WRITE(*,115) I, K1, NODE1, NODE2
+          IF (.not. ALL( NODE1 .eq. NODE ) ) THEN
+             WRITE(*,115) I, K1, NODE1, NODE
              STOP 1
           ENDIF
           IF (M - PQueue(I)%SIZE() .ne. 1) THEN
@@ -444,10 +463,10 @@
           ENDIF
           NODE2(:) = NODES(I,K2,:)
           M = PQueue(I)%SIZE()
-          ! call PQueue(I)%DELETE( NODE2, DNODE=NODE1 )
-          call PQueue(I)%DELETE( K=heapIdx(I, K2), DNODE=NODE1 )
-          IF (.not. ALL( NODE2 .eq. NODE1)) THEN
-             WRITE(*,115) I, K2, NODE2, NODE1
+          ! call PQueue(I)%DELETE( NODE2, DNODE=NODE )
+          call PQueue(I)%DELETE( K=heapIdx(I, K2), DNODE=NODE )
+          IF (.not. ALL( NODE2 .eq. NODE)) THEN
+             WRITE(*,115) I, K2, NODE2, NODE
           ENDIF
           IF (M - PQueue(I)%SIZE() .ne. 1)  THEN
              WRITE(*,*) ' Failed to delete node2 ', NODE2, ' from queue ', I
