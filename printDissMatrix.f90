@@ -16,13 +16,14 @@ PROGRAM	PRINTDISSMATRIX
 
 
   argCount = 1
+  uid = 15
   ! first get the filename we want to dump
   call get_command_argument( argCount, argStr, argLen, stat)
   fileName = argStr
   inquire( file=trim(fileName), exist=fileExist )
   if (stat .ne. 0 .or. .not. fileExist) &
        call PRINT_USAGE()
-  open(uid, file=fileName, status='old', form='unformatted')
+  open(uid, file=trim(fileName), status='old', form='unformatted')
 
   argCount = argCount + 1
   ! first get the size of the side of the tile we used
@@ -54,9 +55,10 @@ PROGRAM	PRINTDISSMATRIX
   ELSE
      ALLOCATE(R(NPOINTS, NPOINTS))
      DO I = 1,NPOINTS
-        DO J = 1, NPOINTS
-           READ(uid) R(I,J)
-        ENDDO
+        READ(uid) R(I,:)
+        ! DO J = 1, NPOINTS
+        !    READ(uid) R(I,J)
+        ! ENDDO
      ENDDO
   ENDIF
 

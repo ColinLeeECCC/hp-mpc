@@ -22,10 +22,10 @@ s.compile -src mheap.f90 -openmp -mpi  -librmn -libappl netcdff netcdf hdf5_hl h
 
 s.compile -src cluster_openmp.f90 -openmp -mpi -librmn -libappl netcdff netcdf hdf5_hl hdf5 z curl irc # -debug -strict -prof -O 0
 
-s.compile -src cluster.f90 -openmp -mpi -librmn -libappl netcdff netcdf hdf5_hl hdf5 z curl irc # -debug -strict -prof -O 0
+s.compile -src cluster_mpi.f90 -openmp -mpi -librmn -libappl netcdff netcdf hdf5_hl hdf5 z curl irc -debug -strict -prof -O 0
 
 s.compile -obj kz_hc_GEM-MACH_v24_read_clust_v3.o mheap.o -o kzCluster.abs -openmp -mpi  -librmn -libappl netcdff netcdf hdf5_hl hdf5 z curl irc
 
 s.compile -obj cluster_openmp.o mheap.o -o cluster_omp.abs -mpi -openmp -librmn -libappl netcdff netcdf hdf5_hl hdf5 z curl irc # -debug -strict -prof -O 0
 
-s.compile -obj cluster.o mheap.o -o cluster.abs -openmp -mpi  -librmn -libappl netcdff netcdf hdf5_hl hdf5 z curl irc # -debug -strict -prof -O 0
+s.compile -obj cluster_mpi.o mheap.o -o cluster.abs -openmp -mpi  -librmn -libappl netcdff netcdf hdf5_hl hdf5 z curl irc -debug -strict -prof -O 0
