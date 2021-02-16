@@ -39,7 +39,9 @@ cat <<EOD >jobscript.sh
 wrkDir=/space/hall3/sitestore/eccc/aq/r1/cle001/src/parallel
 cd \${wrkDir}
 
-r.run_in_parallel -npex ${NODESX} -npey ${NODESY} -inorder -pgm \${wrkDir}/cluster.abs
+# export OMPI_MCA_io_base_verbose=40
+
+r.run_in_parallel -npex ${NODESX} -npey ${NODESY} -inorder -pgm \${wrkDir}/cluster.abs -verbose
 EOD
 # on ppp3 -cpus 40x1 -cm 5G gives only one node; as a workaround use -cpus 44x44 -cm 210G
 

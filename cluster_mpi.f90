@@ -78,7 +78,7 @@
     integer                    :: IDAY, IHR, HRS_SINCE_START
     integer                    :: ierr
 
-    real*8                     :: R, RMIN, RMAX, Nt
+    real*8                     :: R, RMIN, RMAX, RTMP, Nt
 
     integer*8                  :: countStart, countEnd, countRate, countMax
     integer                    :: uid
@@ -87,9 +87,11 @@
     ! mpi variables
     integer, parameter         :: ROOT = 0
     integer                    :: myRank, numProcs
-    integer                    :: status(MPI_STATUS_SIZE)
+    integer                    :: status(MPI_STATUS_SIZE), readCount
     real*8                     :: startTimer, endTimer
-    integer                    :: nodeType
+    integer                    :: nodeType, dissMatRowType, dissMatBlockType
+    integer(KIND=MPI_OFFSET_KIND):: disp
+    integer                    :: mpi_uid
 
     ! mpi clustering variables
     integer                    :: II
@@ -212,41 +214,102 @@
          start_day, end_year, end_mon, end_day, forecastHour,  &
          grid_ni, grid_nj
     ! disabling saving and of data for now
-    saveDissMatrix = .false.
+    saveDissMatrix = .true.
     uid = 15
-    ! WRITE(*,*) ' Checking if ', trim(dataFileName), ' exists...'
-    ! inquire(file=dataFileName, exist=loadDissMatrix)
+    WRITE(*,*) ' Checking if ', trim(dataFileName), ' exists...'
+    inquire(file=dataFileName, exist=loadDissMatrix)
     call SYSTEM_CLOCK( countStart, countRate, countMax )
     
-    loadDissMatrix = .false.
     IF ( loadDissMatrix ) THEN
        WRITE(*,*) ' Yes. Loading dissimilarity matrix'
        saveDissMatrix = .false.
 
        WRITE(*,*) ' Allocating pQueue with len=', numPoints
-       ALLOCATE(PQueue(numPoints))
-       ALLOCATE(NODES(numPoints, numPoints,2))
+       ALLOCATE(PQueue(numClustersThisNode))
+       ALLOCATE(NODES(numClustersThisNode, numPoints,2))
        ALLOCATE(LIVE(numPoints))
+       ALLOCATE(heapIdx(numClustersThisNode,numPoints))
        ALLOCATE(clusterSize(numPoints))
-       ALLOCATE(heapIdx(numPoints,numPoints))
        WRITE(*,*) ' Allocated'
 
-       OPEN(uid, file=trim(dataFileName), form='unformatted', status='old')
-       DO N = 1, numPoints
-          CALL PQueue(N)%INIT( int(numPoints,4), 2, GREATER1 )
-          READ(uid) NODES(N,:,1)
-          DO I = 1, numPoints
-             IF (N .eq. I) CYCLE
-             
-             NODES(N,I,2) = real(I,8)
+       clusterSize = 1
+       live = .true.
 
-             CALL PQueue(N)%INSERT( NODES(N,I,:) )
-             heapIdx(N,I) = PQueue(N)%SIZE()
+       WRITE(*,*) 'Opening'
+
+       call MPI_FILE_OPEN(MPI_COMM_WORLD, trim(dataFileName), MPI_MODE_RDONLY, MPI_INFO_NULL, mpi_uid, ierr)
+       IF (IERR .ne. MPI_SUCCESS) THEN
+          WRITE(*,*) ' ERROR: Opening file ', trim(dataFileName)
+          call MPI_Abort(MPI_COMM_WORLD, 4, IERR)
+       ENDIF
+       ! This is a little bit experimental at the moment. I think we should be able
+       ! to set the view with this vector with COUNT=numClustersThisNode, BLOCKLENGTH=numPoints,
+       ! STRIDE=numPoints*numProcs
+       WRITE(*,*) 'Creating block type'
+       call MPI_Type_vector(numClustersThisNode, numPoints, numPoints*numProcs, &
+            MPI_DOUBLE_PRECISION, dissMatBlockType, ierr)
+       call MPI_Type_commit(dissMatBlockType, ierr)
+       ! I think multiplying by 8 for real*8 should be right...
+       disp = myRank * numPoints * 8_MPI_OFFSET_KIND
+       WRITE(*,*) 'Setting view'
+       call MPI_FILE_SET_VIEW(mpi_uid, disp, MPI_DOUBLE_PRECISION, &
+            dissMatBlockType, 'native', MPI_INFO_NULL, ierr)
+
+       WRITE(*,*) 'Creating row type'
+       ! Now we need a data type for the individual row
+       call MPI_Type_contiguous( numPoints, MPI_DOUBLE_PRECISION, dissMatRowType, ierr )
+       call MPI_Type_commit( dissMatRowType, ierr )
+
+       RMIN = 9.999d9
+       RMAX = -9.999d9
+       
+       DO II = 1, numClustersThisNode
+          I = myClusters(II)
+          CALL PQueue(II)%INIT( int(numPoints,4), 2, GREATER1 )
+            
+          call MPI_File_Read( mpi_uid, NODES(II,:,1), 1, dissMatRowType, status, ierr )
+          IF (ierr .ne. MPI_SUCCESS) THEN
+             WRITE(*,*) 'MPI_File_Read retured ierr = ', ierr
+             call MPI_Abort(MPI_COMM_WORLD, 4, ierr)
+          ENDIF
+          call MPI_Get_count(status, MPI_DOUBLE_PRECISION, readCount, ierr)
+          IF ( readCount .ne. numPoints ) THEN
+             WRITE(*,*) 'MPI_File_Read read ', readCount, ' not ', numPoints
+             call MPI_Abort(MPI_COMM_WORLD, 4, ierr)
+          ENDIF
+          
+          DO J = 1, numPoints
+             IF (I .eq. J) CYCLE
+             
+             NODES(II,J,2) = real(J,8)
+             CALL PQueue(II)%INSERT( NODES(II,J,:), heapIdx(II,J) )
           ENDDO
-          LIVE(N) = .true.
-          clusterSize(N) = 1
+          IF (I .eq. 1) THEN
+             RTMP = MINVAL( NODES(II,2:numPoints,1) )
+          ELSEIF (I .eq. numPoints) THEN
+             RTMP = MINVAL( NODES(II,1:numPoints-1,1) )
+          ELSE
+             RTMP = MIN( MINVAL( NODES(II,1:(I-1), 1) ), &
+                  MINVAL( NODES(II, (I+1):numPoints,1) ) )
+          ENDIF
+          IF (RTMP < RMIN) &
+               RMIN = RTMP
+          IF (I .eq. 1) THEN
+             RTMP = MAXVAL( NODES(II,2:numPoints,1) )
+          ELSEIF (I .eq. numPoints) THEN
+             RTMP = MAXVAL( NODES(II,1:numPoints-1,1) )
+          ELSE
+             RTMP = MAX( MAXVAL( NODES(II,1:(I-1), 1) ), &
+                  MAXVAL( NODES(II, (I+1):numPoints,1 ) ) )
+          ENDIF
+          IF (RTMP > RMAX) &
+               RMAX = RTMP
        ENDDO
-       CLOSE(UID)
+       call MPI_File_Close( mpi_uid, ierr )
+       WRITE(*,*) 'Finished reading dissimilarity matrix. File closed.'
+
+       RMIN = 1d0 - RMIN
+       RMAX = 1d0 - RMAX
     ELSE
        WRITE(*,*) ' No. Computing dissimilarity matrix'
 
@@ -448,14 +511,44 @@
             start_day, end_year, end_mon, end_day, forecastHour,  &
             grid_ni, grid_nj
 107    FORMAT(a,i4.4,i2.2,i2.2, '_', i4.4,i2.2,i2.2,'_', i2.2, '_', &
-            i4.4, 'x', i4.4, '.bin')
-       open( uid, file=trim(dataFileName),form='unformatted')
-       DO N = 1,numPoints
-!          DO I = 1,numPoints
-             WRITE(uid) NODES(N,:,1)
-!          ENDDO
+            i4.4, 'x', i4.4, '_mpio.bin')
+
+       WRITE(*,*) 'Opening'
+       call MPI_FILE_OPEN(MPI_COMM_WORLD, trim(dataFileName), MPI_MODE_CREATE + MPI_MODE_WRONLY, MPI_INFO_NULL, mpi_uid, ierr)
+       IF (IERR .ne. MPI_SUCCESS) THEN
+          WRITE(*,*) ' ERROR: ', IERR, ' Opening file ', trim(dataFileName)
+          call MPI_Abort(MPI_COMM_WORLD, 4, IERR)
+       ENDIF
+       WRITE(*,*) 'Creating block type'
+       call MPI_Type_vector(numClustersThisNode, numPoints, numPoints*numProcs, &
+            MPI_DOUBLE_PRECISION, dissMatBlockType, ierr)
+       call MPI_Type_commit(dissMatBlockType, ierr)
+       ! I think multiplying by 8 for real*8 should be right...
+       disp = myRank * numPoints * 8_MPI_OFFSET_KIND
+       WRITE(*,*) 'Setting view'
+       call MPI_FILE_SET_VIEW(mpi_uid, disp, MPI_DOUBLE_PRECISION, &
+            dissMatBlockType, 'native', MPI_INFO_NULL, ierr)
+
+       WRITE(*,*) 'Creating row type'
+       ! Now we need a data type for the individual row
+       call MPI_Type_contiguous( numPoints, MPI_DOUBLE_PRECISION, dissMatRowType, ierr )
+       call MPI_Type_commit( dissMatRowType, ierr )            
+
+       DO II = 1,numClustersThisNode
+          call MPI_File_write( mpi_uid, NODES(II,:,1), 1, dissMatRowType, status, ierr )
+          IF (ierr .ne. MPI_SUCCESS) THEN
+             WRITE(*,*) 'MPI_File_write retured ierr = ', ierr
+             call MPI_Abort(MPI_COMM_WORLD, 4, ierr)
+          ENDIF
+          call MPI_Get_count(status, MPI_DOUBLE_PRECISION, readCount, ierr)
+          IF ( readCount .ne. numPoints ) THEN
+             WRITE(*,*) 'MPI_File_write wrote ', readCount, ' not ', numPoints
+             call MPI_Abort(MPI_COMM_WORLD, 4, ierr)
+          ENDIF
+          WRITE(*,*) ' Wrote ', readCount, ' doubles to file.'
        ENDDO
-       close(UID)
+       call MPI_File_Close( mpi_uid, ierr )
+       WRITE(*,*) 'Finished writing dissimilarity matrix. File closed.'
        WRITE(*,*) 'Done.'
     ENDIF
     
