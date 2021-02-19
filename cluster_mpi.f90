@@ -222,8 +222,10 @@ program cluster
   WRITE(dataFileName,107) trim(outDir), start_year, start_mon,     &
        start_day, end_year, end_mon, end_day, forecastHour,  &
        grid_ni, grid_nj
-  ! disabling saving and of data for now
-  loadDissMatrix = .false.
+  ! in most cases, we will load the dissMatrix from file, either
+  ! because it already exists, or because we computed it tilewise and
+  ! saved it out to be read in by the appropriate nodes
+  loadDissMatrix = .true.
   uid = 15
   WRITE(*,*) ' Checking if ', trim(dataFileName), ' exists...'
   inquire(file=dataFileName, exist=saveDissMatrix)
@@ -245,7 +247,6 @@ program cluster
           MOD(numProcs, 2) .eq. 0 .or. &
           dissNR**2 .eq. REAL( numProcs ) ) ) THEN
         tileDissMat = .true.
-        loadDissMatrix = .true.
         dissN = INT(dissNR)
         dissNR = REAL(dissN)
         dissM = INT(CEILING( REAL(numProcs) / REAL( dissN ) ))
@@ -587,19 +588,17 @@ program cluster
         ENDDO
         !$OMP END PARALLEL DO
      ENDIF
-     write(*,*) '.'
+
      call SYSTEM_CLOCK( countEnd, countRate, countMax )
 
-     write(*,*) '+'
+
      DEALLOCATE( TRACER_SUM )
-     write(*,*) '-'
      DEALLOCATE( TRACER_SQSUM )
-     write(*,*) '!'
      DEALLOCATE( TRACER_XYSUM )
   END IF ! ( saveDissMatrix )
 
-  ! IF ( .not. loadDissMatrix ) THEN
-  IF ( .false. ) THEN
+  IF ( loadDissMatrix ) THEN
+     WRITE(*,*) ' Loading dissimilarity matrix...'
      WRITE(*,*) ' Allocating pQueue with len=', numPoints
      ALLOCATE(PQueue(numClustersThisNode))
      ALLOCATE(NODES(numClustersThisNode, numPoints,2))
