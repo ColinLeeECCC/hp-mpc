@@ -2,12 +2,16 @@ PROGRAM	PRINTDISSMATRIX
 
   implicit none
 
-  real(kind=4),allocatable,dimension(:,:) &
+  real(kind=4),allocatable,dimension(:,:)  &
                      :: E
-  real(kind=8),allocatable,dimension(:,:) &
+  real(kind=8),allocatable,dimension(:,:)  &
                      :: R
-
-  integer            :: i,j
+  integer(kind=1),allocatable,dimension(:) &
+                     :: T
+  integer(kind=1)    :: tmpi(8)
+  real(kind=8)       :: tmpr
+  equivalence (tmpi, tmpr)
+  integer            :: i,j,l
 
   character(len=256) :: argStr, fileName
   integer            :: nside, ftype, argLen, stat
@@ -23,7 +27,6 @@ PROGRAM	PRINTDISSMATRIX
   inquire( file=trim(fileName), exist=fileExist )
   if (stat .ne. 0 .or. .not. fileExist) &
        call PRINT_USAGE()
-  open(uid, file=trim(fileName), status='old', form='unformatted')
 
   argCount = argCount + 1
   ! first get the size of the side of the tile we used
@@ -40,10 +43,17 @@ PROGRAM	PRINTDISSMATRIX
   READ( argStr(1:argLen), '(i4)' ) ftype
 
   if ( stat .ne. 0 .or. .not. (ftype .eq. 4 .or. &
-       ftype .eq. 8 ) ) &
+       ftype .eq. 8 .or. &
+       ftype .eq. 9 ) ) &
        call PRINT_USAGE()
 
   NPOINTS = NSIDE * NSIDE
+  if ( ftype .eq. 9 ) then
+     open(uid, file=trim(fileName), status='old', form='unformatted', &
+          access='direct', recl=NPOINTS*8, convert='BIG_ENDIAN')
+  else
+     open(uid, file=trim(fileName), status='old', form='unformatted')
+  endif
   IF (FTYPE .eq. 4) THEN
      ALLOCATE(E(NPOINTS, NPOINTS))
      DO I = 1,NPOINTS
@@ -52,13 +62,31 @@ PROGRAM	PRINTDISSMATRIX
         ENDDO
      ENDDO
      
-  ELSE
+  ELSE IF ( FTYPE .eq. 8 ) THEN
      ALLOCATE(R(NPOINTS, NPOINTS))
      DO I = 1,NPOINTS
         READ(uid) R(I,:)
         ! DO J = 1, NPOINTS
         !    READ(uid) R(I,J)
         ! ENDDO
+     ENDDO
+  ELSE IF ( FTYPE .eq. 9 ) THEN
+     ALLOCATE(R(NPOINTS, NPOINTS))
+     ALLOCATE(T(NPOINTS*8))
+     DO I = 1,NPOINTS
+        ! there has to be a better way to do this but I can't think of it right now
+        ! i've tried a few obvious things and the don't work.
+        READ(uid,rec=I, iostat=stat) (T(J),J=1,NPOINTS*8)
+        if (stat < 0) then
+           write(*,*) ' Reached EOF at I = ', I
+           EXIT
+        else
+           
+        ENDIF
+        DO J = 1,NPOINTS
+           TMPI = T(((J-1)*8+1):(J*8))
+           R(I,J) = tmpr
+        ENDDO
      ENDDO
   ENDIF
 
