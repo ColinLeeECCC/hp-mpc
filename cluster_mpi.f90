@@ -74,6 +74,11 @@ program cluster
   real*4,allocatable,dimension(:,:) &
                              :: mpiNodes
 
+  integer,allocatable,dimension(:,:) &
+                             :: clusterPairs
+  real*4,allocatable,dimension(:) &
+                             :: clusterDissimilarities
+  
   integer                    :: I, J, K, N, M
   integer                    :: IDAY, IHR, HRS_SINCE_START
   integer                    :: ierr
@@ -88,7 +93,6 @@ program cluster
   integer, parameter         :: ROOT = 0
   integer                    :: myRank, numProcs
   integer                    :: status(MPI_STATUS_SIZE), readCount
-  real*8                     :: startTimer, endTimer
   integer                    :: nodeType, dissMatRowType, dissMatBlockType
   integer(KIND=MPI_OFFSET_KIND):: disp
   integer                    :: mpi_uid
@@ -101,6 +105,9 @@ program cluster
   real*8                     :: KK1, KK2
   logical                    :: K1ThisRank, K2ThisRank
   integer                    :: K1Rank, K2Rank
+
+  ! MPI timing variables
+  real*8                     :: startTimer, endTimer
 
   ! variables for tiling calculating dissimilarity matrix
   logical                    :: tileDissMat
@@ -229,7 +236,7 @@ program cluster
   uid = 15
   WRITE(*,*) ' Checking if ', trim(dataFileName), ' exists...'
   inquire(file=dataFileName, exist=saveDissMatrix)
-  call SYSTEM_CLOCK( countStart, countRate, countMax )
+  startTimer = MPI_Wtime()
   saveDissMatrix = .not. saveDissMatrix
 
   IF ( saveDissMatrix ) THEN
@@ -500,10 +507,6 @@ program cluster
         call MPI_Barrier( MPI_COMM_WORLD, ierr )
      ELSE
         loadDissMatrix = .false.
-        call SYSTEM_CLOCK( countEnd, countRate, countMax )
-        WRITE(*,*) 'Loading data and precalculating took ', &
-             real(countEnd - countStart) / real(countRate), ' sec'
-        countStart = countEnd
 
         RMIN = 9.999d9
         RMAX = -9.999d9
@@ -589,15 +592,16 @@ program cluster
         !$OMP END PARALLEL DO
      ENDIF
 
-     call SYSTEM_CLOCK( countEnd, countRate, countMax )
-
-
      DEALLOCATE( TRACER_SUM )
      DEALLOCATE( TRACER_SQSUM )
      DEALLOCATE( TRACER_XYSUM )
+     endTimer = MPI_Wtime()
+     WRITE(*,*) ' Calclating dissimilarity matrix took ', endTimer - startTimer, ' seconds'
   END IF ! ( saveDissMatrix )
 
+
   IF ( loadDissMatrix ) THEN
+     startTimer = MPI_Wtime()
      WRITE(*,*) ' Loading dissimilarity matrix...'
      WRITE(*,*) ' Allocating pQueue with len=', numPoints
      ALLOCATE(PQueue(numClustersThisNode))
@@ -682,15 +686,17 @@ program cluster
      ENDDO
      call MPI_File_Close( mpi_uid, ierr )
      WRITE(*,*) 'Finished reading dissimilarity matrix. File closed.'
+
+     endTimer = MPI_Wtime()
+     WRITE(*,*) 'Loading dissimilarity matrix took ', endTimer - startTimer, ' seconds'
   ENDIF
   RMIN = 1d0 - RMIN
   RMAX = 1d0 - RMAX
 
   WRITE(*,*) 'R ranged from ', RMIN, ' to ', RMAX
-  WRITE(*,*) 'Calculating initial dissimilarity scores took ', &
-       real(countEnd - countStart) / real(countRate), ' sec'
 
   if (saveDissMatrix) THEN
+     startTimer = MPI_Wtime()
      WRITE(*,*) 'Saving dissimilarity matrix...'
      WRITE(dataFileName,107) trim(outDir), start_year, start_mon,     &
           start_day, end_year, end_mon, end_day, forecastHour,  &
@@ -735,6 +741,8 @@ program cluster
      call MPI_File_Close( mpi_uid, ierr )
      WRITE(*,*) 'Finished writing dissimilarity matrix. File closed.'
      WRITE(*,*) 'Done.'
+     endTimer = MPI_Wtime()
+     WRITE(*,*) 'Saving dissimilarity matrix took ', endTimer - startTimer, ' seconds'
   ENDIF
 
   ALLOCATE( mpiNodes( 3, numProcs ) )
@@ -743,8 +751,12 @@ program cluster
   ALLOCATE(NODESK1(2,numPoints))
   ALLOCATE(NODESK2(2,numPoints))
   ALLOCATE(VISITED(numPoints))
+  IF ( myRank .eq. ROOT ) THEN
+     ALLOCATE(clusterPairs(numPoints - 1, 2))
+     ALLOCATE(clusterDissimilarities(numPoints - 1))
+  ENDIF
 
-  call SYSTEM_CLOCK( countStart, countRate, countMax )
+  startTimer = MPI_Wtime()
 
   ! Need to iterate this many times to get to a single cluster
   DO K = 1, numPoints-1
@@ -833,7 +845,12 @@ program cluster
         call MPI_Abort(MPI_COMM_WORLD, 1, IERR)
      ENDIF
      NODE1(1) = RMIN
-
+     
+     IF ( myRank .eq. ROOT ) THEN
+        clusterPairs(K,1) = k1
+        clusterPairs(K,2) = k2
+        clusterDissimilarities(K) = NODE1(1)
+     ENDIF
      IF (myRank .eq. ROOT) THEN
         IF (numPoints .lt. 1000) THEN
            WRITE(*,106) k1, k2, NODE1(1)
@@ -1024,10 +1041,25 @@ program cluster
      clusterSize(K1) = clusterSize(K1) + clusterSize(K2)
      clusterSize(K2) = 0
   ENDDO
-  call SYSTEM_CLOCK( countEnd, countRate, countMax )
-  WRITE(*,*) 'Clustering took ', &
-       real(countEnd - countStart) / real(countRate), ' sec'
+  endTimer = MPI_Wtime()
+  WRITE(*,*) 'Clustering took ', endTimer - startTimer,' sec'
   countStart = countEnd
+
+  IF ( myRank .eq. ROOT ) THEN
+     WRITE(dataFileName,126) trim(outDir), start_year, start_mon,     &
+          start_day, end_year, end_mon, end_day, forecastHour,  &
+          grid_ni, grid_nj
+126  FORMAT(a,i4.4,i2.2,i2.2, '_', i4.4,i2.2,i2.2,'_', i2.2, '_', &
+          i4.4, 'x', i4.4, '_clusters.dat')
+     open( uid, file=trim(dataFileName), form='formatted', action='write', &
+          status='replace', iostat=ierr)
+     write(uid,*) 'xx\tlki\tlkj'
+     DO K = 1, numPoints - 1
+        write(uid,125) clusterDissimilarities(K), clusterPairs(K,1), clusterPairs(K,2)
+     ENDDO
+125  FORMAT(f8.4, 10x, i5, 5x, i5)
+     close(uid)
+  ENDIF
 
   call MPI_FINALIZE(IERR)
 
