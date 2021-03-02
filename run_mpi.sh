@@ -2,8 +2,8 @@
 
 # set up batch system parameters for MPI threads and wall clock time (min)
 # this setup should be suitable for a useFract = 6 or up
-NODESX=1   # number of nodes
-NODESY=4   # MPI threads per node
+NODESX=16   # number of nodes
+NODESY=1   # MPI threads per node
 WTIME=270    # wall clock time in minutes
 # use this setup for using all the data useFract=1
 # NODESX=40   # number of nodes
@@ -14,10 +14,8 @@ WTIME=270    # wall clock time in minutes
 # to the cores and memory per node divided by the number of MPI
 # threads per node. OMPTHREADS is not the same as the OMP variable
 # OMP_NUM_THREADS because that should be set by the grid engine.
-# OMPTHREADS=$(( 40 / NODESY ))
-# MEM="$(( 160 / NODESY ))G"
-OMPTHREADS=1
-MEM="2G"
+OMPTHREADS=$(( 40 / NODESY ))
+MEM="$(( 160 / NODESY ))G"
 
 rm jobscript.sh
 cat <<EOD >jobscript.sh
@@ -41,8 +39,8 @@ cd \${wrkDir}
 
 # export OMPI_MCA_io_base_verbose=40
 
-r.run_in_parallel -npex ${NODESX} -npey ${NODESY} -inorder -pgm \${wrkDir}/cluster.abs -verbose
+r.run_in_parallel -npex ${NODESX} -npey ${NODESY} -inorder -pgm \${wrkDir}/cluster.abs -verbose -args \$@
 EOD
 # on ppp3 -cpus 40x1 -cm 5G gives only one node; as a workaround use -cpus 44x44 -cm 210G
 
-ord_soumet jobscript.sh -mach eccc-ppp3 -cpus ${NODESX}x${NODESY}x${OMPTHREADS} -cm ${MEM} -waste 90 -w ${WTIME} -mpi -jn colin_mpi -listing /space/hall3/sitestore/eccc/aq/r1/cle001/src/parallel/listings
+ord_soumet jobscript.sh -mach eccc-ppp3 -cpus ${NODESX}x${NODESY}x${OMPTHREADS} -cm ${MEM} -waste 90 -w ${WTIME} -mpi -jn colin_mpi -listing /space/hall3/sitestore/eccc/aq/r1/cle001/src/parallel/listings -args $@

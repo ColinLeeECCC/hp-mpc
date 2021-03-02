@@ -20,9 +20,11 @@ program cluster
   integer, parameter          :: dp = selected_real_kind(2 * precision(1.0_sp))
 
   ! file unit for input arglist file
+  character(256)             :: arglist, arg
   integer                    :: fu_in
 
   ! input parameters
+  logical                    :: only_save_dissMat,tmpLogical
   character(256)             :: inDir, outDir
   integer                    :: start_year, start_mon, start_day
   integer                    ::   end_year,   end_mon,   end_day
@@ -100,6 +102,7 @@ program cluster
   ! mpi clustering variables
   integer                    :: II,JJ
   integer                    :: myPoints, numClustersThisNode
+  integer                    :: clusterPrintPoint
   integer,allocatable,dimension(:) &
                              :: myClusters,clusterRanks
   real*8                     :: KK1, KK2
@@ -129,11 +132,37 @@ program cluster
   call MPI_COMM_SIZE(MPI_COMM_WORLD, numProcs, ierr)
   if (myRank == ROOT) WRITE(*,*) 'MPI Initizlied with ', numProcs, ' processors'
 
+  ! Set default parameters
+  arglist = 'arglist.lst'
+  only_save_dissMat = .false.
+
+  I = 1
+  do while ( I .le. command_argument_count())
+     call get_command_argument(i, arg)
+     select case (arg)
+     case ('-s', '--only-save')
+        only_save_dissMat = .true.
+     case ('-f', '--argfile')
+        I = I + 1
+        call get_command_argument(i, arglist)
+     case default
+        IF ( I .eq. command_argument_count() ) THEN
+           arglist = trim( arg )
+        ELSE
+           print '(2a, /)', 'unrecognised command-line option: ', arg
+           stop
+        ENDIF
+     end select
+     I = I + 1
+  ENDDO
+  
+
+  WRITE(*,*) '  Reading arguments from file ''', trim(arglist), ''''
   ! Read in argument list from arglist.lst file
   fu_in = 15
-  open(unit=fu_in, file='arglist.lst', status='old', iostat=ierr)
+  open(unit=fu_in, file=trim(arglist), status='old', iostat=ierr)
   IF (ierr .ne. 0) THEN
-     WRITE(6,*) ' Couldn''t open "arglist.list"'
+     WRITE(6,*) ' Couldn''t open "', trim(arglist), '"'
      call MPI_Abort(MPI_COMM_WORLD, 2, IERR)
   ENDIF
 
@@ -143,7 +172,14 @@ program cluster
   READ(fu_in, *) useFractionOfRegion
   READ(fu_in, '(a8)') gemMachFieldName
   READ(fu_in, '(a8)') fieldName
-  READ(fu_in, '(a256)') outDir
+  READ(fu_in, '(a256)', iostat = ierr) outDir
+
+  if (ierr .eq. 0) THEN
+     READ(fu_in, '(l1)', iostat = ierr) tmpLogical
+     if ( ierr .eq. 0 ) THEN
+        only_save_dissMat = tmpLogical
+     ENDIF
+  endif
 
   ! make sure inDir and outDir end in a '/'
   strLen = len_trim(inDir)
@@ -599,11 +635,20 @@ program cluster
      WRITE(*,*) ' Calclating dissimilarity matrix took ', endTimer - startTimer, ' seconds'
   END IF ! ( saveDissMatrix )
 
+  if (only_save_dissMat) THEN
+     if (myRank .eq. ROOT) THEN
+        WRITE(*,*) ' Only saving dissimilarity matrix. Exiting'
+     ENDIF
+
+     call MPI_Finalize( IERR )
+     STOP
+     
+  ENDIF
 
   IF ( loadDissMatrix ) THEN
      startTimer = MPI_Wtime()
      WRITE(*,*) ' Loading dissimilarity matrix...'
-     WRITE(*,*) ' Allocating pQueue with len=', numPoints
+     WRITE(*,*) ' Allocating pQueue with len=', numClustersThisNode
      ALLOCATE(PQueue(numClustersThisNode))
      ALLOCATE(NODES(numClustersThisNode, numPoints,2))
      ALLOCATE(LIVE(numPoints))
@@ -642,8 +687,15 @@ program cluster
      RMIN = 9.999d9
      RMAX = -9.999d9
 
+     clusterPrintPoint = int(numClustersThisNode / 10d0)
+    
      DO II = 1, numClustersThisNode
         I = myClusters(II)
+        IF ( myRank .eq. ROOT ) THEN
+           IF ( MOD( II, clusterPrintPoint ) .eq. 1 ) THEN
+              WRITE(*,*) '  Initializing pQ ', II, ' out of ', numClustersThisNode
+           ENDIF
+        ENDIF
         CALL PQueue(II)%INIT( int(numPoints,4), 2, GREATER1 )
 
         call MPI_File_Read( mpi_uid, NODES(II,:,1), 1, dissMatRowType, status, ierr )
