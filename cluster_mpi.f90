@@ -288,7 +288,7 @@ program cluster
      dissNR = SQRT(REAL( numProcs ))
      if ( numProcs .ge. 4 .and. ( &
           MOD(numProcs, 2) .eq. 0 .or. &
-          dissNR**2 .eq. REAL( numProcs ) ) ) THEN
+          INT(dissNR)**2 .eq. numProcs ) ) THEN
         tileDissMat = .true.
         dissN = INT(dissNR)
         dissNR = REAL(dissN)
@@ -296,7 +296,7 @@ program cluster
         dissSizeI = CEILING( numPoints / REAL( dissN ) )
         dissSizeJ = CEILING( numPoints / REAL( dissM ) )
         dissStartI =      MOD(myRank,  dissN)  * dissSizeI + 1
-        dissStartJ = INT(REAL(myRank / dissM)) * dissSizeJ + 1
+        dissStartJ = INT(REAL(myRank / dissN)) * dissSizeJ + 1
         IF ( dissStartI + dissSizeI .gt. numPoints ) THEN
            dissSizeI = numPoints - dissStartI + 1
         END IF
@@ -304,8 +304,18 @@ program cluster
            dissSizeJ = numPoints - dissStartJ + 1
         END IF
 124     FORMAT('Node ', i2, ' I = ', i4, ' to ', i4, ', J = ', i4, ' to ', i4)
-        WRITE(*,124) myRank, dissStartI, dissStartI + dissSizeI - 1, &
-             dissStartJ, dissStartJ + dissSizeJ - 1
+127     FORMAT('Node ', i2, ' I = ', i7, ' to ', i7, ', J = ', i7, ' to ', i7)
+128     FORMAT('Node ', i2, ' I = ', i10, ' to ', i10, ', J = ', i10, ' to ', i10)
+        IF ( numPoints .lt. 1000 ) THEN
+           WRITE(*,124) myRank, dissStartI, dissStartI + dissSizeI - 1, &
+                dissStartJ, dissStartJ + dissSizeJ - 1
+        ELSEIF ( numPoints .lt. 1000000 ) THEN
+           WRITE(*,127) myRank, dissStartI, dissStartI + dissSizeI - 1, &
+                dissStartJ, dissStartJ + dissSizeJ - 1
+        ELSE
+           WRITE(*,128) myRank, dissStartI, dissStartI + dissSizeI - 1, &
+                dissStartJ, dissStartJ + dissSizeJ - 1
+        ENDIF
         
      ENDIF
 
@@ -698,6 +708,10 @@ program cluster
         ENDIF
         CALL PQueue(II)%INIT( int(numPoints,4), 2, GREATER1 )
 
+        IF ( myRank .eq. ROOT .and. II .eq. numClustersThisNode ) THEN
+           WRITE(*,*) ' pQ ', II, ' initialized.'
+        ENDIF
+
         call MPI_File_Read( mpi_uid, NODES(II,:,1), 1, dissMatRowType, status, ierr )
         IF (ierr .ne. MPI_SUCCESS) THEN
            WRITE(*,*) 'MPI_File_Read retured ierr = ', ierr
@@ -705,16 +719,26 @@ program cluster
         ENDIF
         call MPI_Get_count(status, MPI_DOUBLE_PRECISION, readCount, ierr)
         IF ( readCount .ne. numPoints ) THEN
-           WRITE(*,*) 'MPI_File_Read read ', readCount, ' not ', numPoints
+           WRITE(*,*) 'MPI_File_Read read ', readCount, ' not ', numPoints, &
+                ' at step ', II, '(', I, ')'
            call MPI_Abort(MPI_COMM_WORLD, 4, ierr)
         ENDIF
 
+        IF ( myRank .eq. ROOT .and. II .eq. numClustersThisNode ) THEN
+           WRITE(*,*) ' Row ', II, ' read from file.'
+        ENDIF
+        
         DO J = 1, numPoints
            IF (I .eq. J) CYCLE
 
            NODES(II,J,2) = real(J,8)
            CALL PQueue(II)%INSERT( NODES(II,J,:), heapIdx(II,J) )
         ENDDO
+
+        IF ( myRank .eq. ROOT .and. II .eq. numClustersThisNode ) THEN
+           WRITE(*,*) ' All values inserted into pQ ', II
+        ENDIF
+        
         IF (I .eq. 1) THEN
            RTMP = MINVAL( NODES(II,2:numPoints,1) )
         ELSEIF (I .eq. numPoints) THEN
