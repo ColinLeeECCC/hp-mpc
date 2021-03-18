@@ -24,10 +24,14 @@ h(x) = e * (x ** 2) * log(x)
 fit h(x) 'profile_serial.dat' using 1:5 via e
 # hstr = sprintf('x^{%.2g}', f)
 hstr = sprintf('x^2 log(x)')
+i(x) = m * (x ** 2) * log(x)
+fit i(x) 'profile_mpi.dat' using 1:5 via m
+# hstr = sprintf('x^{%.2g}', f)
+istr = sprintf('x^2 log(x)')
 set key top left
 # set yrange [0:2000]
-set xlabel '(domain size)^{1/2}'
+set xlabel 'domain size'
 set ylabel 'Clustering wall-time [s]'
-plot 'profile.dat' using 1:5 title "Colin's OMP" lw 1.5, f(x) title fstr lw 1.5, '../serial/profile.dat' using 1:5 title "Serial" lw 1.5, g(x) title gstr lw 1.5, 'profile_serial.dat' using 1:5 title "Colin's Serial" lw 1.5, h(x) title hstr lw 1.5
+plot 'profile.dat' using 1:5 title "Colin's OMP" lw 1.5, f(x) title fstr lw 1.5, '../serial/profile.dat' using 1:5 title "Serial" lw 1.5, g(x) title gstr lw 1.5, 'profile_serial.dat' using 1:5 title "Colin's Serial" lw 1.5, h(x) title hstr lw 1.5, 'profile_mpi.dat' using 1:5 title "MPI" lw 1.5, i(x) title istr lw 1.5
 print sprintf(' OMP speedup = %.2g', e / a )
 pause -1 "Hit any key to continue"

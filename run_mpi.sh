@@ -2,8 +2,8 @@
 
 # set up batch system parameters for MPI threads and wall clock time (min)
 # this setup should be suitable for a useFract = 6 or up
-NODESX=16   # number of nodes
-NODESY=1   # MPI threads per node
+NODESX=12   # number of nodes
+NODESY=5    # MPI threads per node
 WTIME=270    # wall clock time in minutes
 # use this setup for using all the data useFract=1
 # NODESX=40   # number of nodes
@@ -34,13 +34,29 @@ cat <<EOD >jobscript.sh
 . ssmuse-sh -x hpco/exp/hdf5-netcdf4/parallel/openmpi-3.1.2/static/intel-19.0.3.199/01
 #
 
-wrkDir=/space/hall3/sitestore/eccc/aq/r1/cle001/src/parallel
+wrkDir=/space/hall3/sitestore/eccc/aq/r1/cle001/src/hierarchical-clustering
 cd \${wrkDir}
 
 # export OMPI_MCA_io_base_verbose=40
 
-r.run_in_parallel -npex ${NODESX} -npey ${NODESY} -inorder -pgm \${wrkDir}/cluster.abs -verbose -args \$@
+# Sometimes the default tmpdir collides and we lose all
+# listings. Check if the tmpdir already exists and if so
+# append a letter
+suffix="a"
+tmpDir="\$(pwd -P)/tmpdir\${TRUE_HOST}\$\$"
+
+echo "Checking if \${tmpDir} exists"
+
+while [ -d "\$tmpDir" ]; do
+      echo "Yes. Appending \${suffix}"
+      tmpDir=\$(pwd -P)/tmpdir\${TRUE_HOST}\$\$\${suffix}
+      suffix=\$(echo "\$suffix" | tr "0-9a-z" "1-9a-z_")
+done
+
+echo "tmpDir = \${tmpDir}"
+
+r.run_in_parallel -npex ${NODESX} -npey ${NODESY} -inorder -pgm \${wrkDir}/cluster.abs -verbose -tmpdir \${tmpDir} -args \$@
 EOD
 # on ppp3 -cpus 40x1 -cm 5G gives only one node; as a workaround use -cpus 44x44 -cm 210G
 
-ord_soumet jobscript.sh -mach eccc-ppp3 -cpus ${NODESX}x${NODESY}x${OMPTHREADS} -cm ${MEM} -waste 90 -w ${WTIME} -mpi -jn colin_mpi -listing /space/hall3/sitestore/eccc/aq/r1/cle001/src/parallel/listings -args $@
+ord_soumet jobscript.sh -mach eccc-ppp3 -cpus ${NODESX}x${NODESY}x${OMPTHREADS} -cm ${MEM} -waste 90 -w ${WTIME} -mpi -jn colin_mpi -listing /space/hall3/sitestore/eccc/aq/r1/cle001/src/hierarchical-clustering/listings -args $@

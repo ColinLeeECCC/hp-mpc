@@ -18,7 +18,7 @@ set -x
 
 s.compile -src kz_hc_GEM-MACH_v24_read_clust_v3.f90 -openmp -mpi  -librmn -libappl netcdff netcdf hdf5_hl hdf5 z curl irc
 
-s.compile -src mheap.f90 -openmp -mpi  -librmn -libappl netcdff netcdf hdf5_hl hdf5 z curl irc # -debug -strict -prof -O 0
+s.compile -src mheap.f90 -openmp -mpi  -librmn -libappl netcdff netcdf hdf5_hl hdf5 z curl irc -debug -strict -prof -O 0
 
 s.compile -src cluster_openmp.f90 -openmp -mpi -librmn -libappl netcdff netcdf hdf5_hl hdf5 z curl irc # -debug -strict -prof -O 0
 

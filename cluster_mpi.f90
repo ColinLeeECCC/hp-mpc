@@ -114,13 +114,15 @@ program cluster
 
   ! variables for tiling calculating dissimilarity matrix
   logical                    :: tileDissMat
-  real                       :: dissNR              
   integer                    :: dissN, dissM
   integer                    :: dissSizeI, dissSizeJ
   integer                    :: dissStartI, dissStartJ
   real*8,allocatable,dimension(:,:) &
                              :: dissMat
 
+  ! Variables for dissilimarity matrix file striping
+  integer                    :: numStripes
+  
   ! debugging
   logical,allocatable,dimension(:) :: visited 
 
@@ -262,6 +264,11 @@ program cluster
   WRITE(*,*) '      ', myClusters(1), ', ', myClusters(2), ', ', &
        myClusters(3), '...,', myClusters(numClustersThisNode)
 
+  ! for very large numPoints, our files get too big. The file system seems
+  ! more than happy to go as big as we would like, but the problem is
+  ! when we try to MPI_SET_VIEW we can overflow MPI_OFFSET_KIND. The limit seems
+  ! to be
+
   WRITE(dataFileName,107) trim(outDir), start_year, start_mon,     &
        start_day, end_year, end_mon, end_day, forecastHour,  &
        grid_ni, grid_nj
@@ -285,14 +292,20 @@ program cluster
      tileDissMat = .false.
      ! This only works if our number of MPI nodes is a multiple of 2 or
      ! a square number (I think)
-     dissNR = SQRT(REAL( numProcs ))
+     dissN = INT(SQRT(REAL( numProcs )))
      if ( numProcs .ge. 4 .and. ( &
           MOD(numProcs, 2) .eq. 0 .or. &
-          INT(dissNR)**2 .eq. numProcs ) ) THEN
+          dissN**2 .eq. numProcs ) ) THEN
         tileDissMat = .true.
-        dissN = INT(dissNR)
-        dissNR = REAL(dissN)
         dissM = INT(CEILING( REAL(numProcs) / REAL( dissN ) ))
+        DO WHILE ( dissN * dissM .ne. numProcs )
+           dissN = dissN - 1
+           dissM = INT(CEILING( REAL(numProcs) / REAL( dissN ) ))
+           IF ( dissN .le. 1 ) THEN
+              WRITE(*,*) 'Please choose a number of MPI_THREADS that is a round or square number'
+              call MPI_Abort( MPI_COMM_WORLD, 9, IERR )
+           ENDIF
+        ENDDO
         dissSizeI = CEILING( numPoints / REAL( dissN ) )
         dissSizeJ = CEILING( numPoints / REAL( dissM ) )
         dissStartI =      MOD(myRank,  dissN)  * dissSizeI + 1
@@ -522,7 +535,11 @@ program cluster
              MPI_DOUBLE_PRECISION, dissMatBlockType, ierr)
         call MPI_Type_commit(dissMatBlockType, ierr)
         ! I think multiplying by 8 for real*8 should be right...
-        disp = ((dissStartI - 1) * numPoints + dissStartJ - 1) * 8_MPI_OFFSET_KIND
+        disp = ((INT(dissStartI, kind=MPI_OFFSET_KIND) - 1) * &
+             INT(numPoints, kind=MPI_OFFSET_KIND) + &
+             INT(dissStartJ, kind=MPI_OFFSET_KIND) - 1_MPI_OFFSET_KIND) &
+             * 8_MPI_OFFSET_KIND
+        
         WRITE(*,*) 'Setting view to start at ', disp
         call MPI_FILE_SET_VIEW(mpi_uid, disp, MPI_DOUBLE_PRECISION, &
              dissMatBlockType, 'native', MPI_INFO_NULL, ierr)
