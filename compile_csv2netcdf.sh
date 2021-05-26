@@ -16,4 +16,4 @@ set -x
 . ssmuse-sh -x hpco/exp/hdf5-netcdf4/parallel/openmpi-3.1.2/static/intel-19.0.3.199/01
 #
 
-s.compile -src csv_to_netcdf.F90 -o csv_to_netcdf.abs -libappl netcdf
+s.compile -src csv_to_netcdf.F90 -o csv_to_netcdf.abs -mpi -libappl netcdff netcdf hdf5_hl hdf5 z curl irc
