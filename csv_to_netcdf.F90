@@ -82,14 +82,15 @@ program csv_to_netcdf
   ! Allocate an array to save the entire dataset
   nSpec = ncol
   nPts  = nrow - 1
-  allocate(massSpec(nPts, nSpec))
+  ! NetCDF indexing m
+  allocate(massSpec(nPts,nSpec))
   
   ! Now go back and save all the data in an array
   rewind(unit=10)
   nrow = 0
   ncol = nSpec
   do while (readline(10, line))
-     if (nrow == 1) then
+     if (nrow == 0) then
         ! do nothing with the first row
      else
         call split(line, a)
