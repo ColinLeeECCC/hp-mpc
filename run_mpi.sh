@@ -3,7 +3,7 @@
 # set up batch system parameters for MPI threads and wall clock time (min)
 # this setup should be suitable for a useFract = 6 or up
 NODESX=12   # number of nodes
-NODESY=5    # MPI threads per node
+NODESY=4    # MPI threads per node
 WTIME=270    # wall clock time in minutes
 # use this setup for using all the data useFract=1
 # NODESX=40   # number of nodes

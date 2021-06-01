@@ -24,6 +24,7 @@ program cluster
   integer                    :: fu_in
 
   ! input parameters
+  logical                    :: is_aircraft_data
   logical                    :: only_save_dissMat,tmpLogical
   character(256)             :: inDir, outDir
   integer                    :: start_year, start_mon, start_day
@@ -31,6 +32,7 @@ program cluster
   integer                    :: useFractionOfRegion
   character(8)               :: gemMachFieldName
   character(8)               :: fieldName
+  character(256)             :: ncFieldName
   integer                    :: strLen
   integer                    :: start_date, end_date, start_vec(8), end_vec(8)
   integer                    :: current_date, current_year, current_mon, current_day
@@ -38,13 +40,13 @@ program cluster
 
   ! data file variables
   integer                    :: forecastHour
-  character(256)             :: dataFileName
+  character(256)             :: dataFileName, acFileName
   integer                    :: ncId, variableId
   integer, dimension(NF90_MAX_VAR_DIMS) &
        :: dimIds
   integer                    :: grid_ni, grid_nj, grid_nt
   integer                    :: gridi, gridj, gridi2, gridj2
-  integer                    :: numPoints
+  integer                    :: numPoints, numSpectral
   real*8, allocatable, dimension(:,:) &
                              :: buffer
   real*8, allocatable, dimension(:) &
@@ -144,9 +146,11 @@ program cluster
      select case (arg)
      case ('-s', '--only-save')
         only_save_dissMat = .true.
-     case ('-f', '--argfile')
+     case ('f', '--argfile')
         I = I + 1
         call get_command_argument(i, arglist)
+     case ('a', '--aircraft')
+        is_aircraft_data = .true.
      case default
         IF ( I .eq. command_argument_count() ) THEN
            arglist = trim( arg )
@@ -168,12 +172,18 @@ program cluster
      call MPI_Abort(MPI_COMM_WORLD, 2, IERR)
   ENDIF
 
-  READ(fu_in, '(a256)') inDir ! data where compressed netcdf GEM-MACH data is stored
-  READ(fu_in, '(i4,2(1x,i2.2))') start_year, start_mon, start_day
-  READ(fu_in, '(i4,2(1x,i2.2))')   end_year,   end_mon,   end_day
-  READ(fu_in, *) useFractionOfRegion
-  READ(fu_in, '(a8)') gemMachFieldName
-  READ(fu_in, '(a8)') fieldName
+  if ( .not. is_aircraft_data ) then
+     READ(fu_in, '(a256)') inDir ! data where compressed netcdf GEM-MACH data is stored
+     READ(fu_in, '(i4,2(1x,i2.2))') start_year, start_mon, start_day
+     READ(fu_in, '(i4,2(1x,i2.2))')   end_year,   end_mon,   end_day
+     READ(fu_in, *) useFractionOfRegion
+     READ(fu_in, '(a8)') gemMachFieldName
+     READ(fu_in, '(a8)') fieldName
+  else
+     READ(fu_in, '(a256)') acFileName ! data where compressed netcdf GEM-MACH data is stored
+     READ(fu_in, *) useFractionOfRegion
+     READ(fu_in, '(a256)') ncFieldName
+  end if
   READ(fu_in, '(a256)', iostat = ierr) outDir
 
   if (ierr .eq. 0) THEN
@@ -183,50 +193,84 @@ program cluster
      ENDIF
   endif
 
-  ! make sure inDir and outDir end in a '/'
-  strLen = len_trim(inDir)
-  IF (inDir(strLen:strLen) .ne. '/') THEN
-     inDir = trim(inDir) // '/'
-  ENDIF
+  ! make sure outDir ends in a '/'
   strLen = len_trim(outDir)
   IF (outDir(strLen:strLen) .ne. '/') THEN
      outDir = trim(outDir) // '/'
   ENDIF
 
+  if (.not. is_aircraft_data) then
+     strLen = len_trim(inDir)
+     IF (inDir(strLen:strLen) .ne. '/') THEN
+        inDir = trim(inDir) // '/'
+     ENDIF
 
-  WRITE(*,*) ' Reading compressed netcdf data from ', trim(inDir)
-  WRITE(*,101) start_year, start_mon, start_day, end_year, end_mon, end_day
-101 FORMAT(' Doing ', i4, '-', i2, '-', i2, ' to ', i4, '-', i2, '-', i2)
-  WRITE(*,102) useFractionOfRegion
-102 FORMAT(' Using only 1/', i3, ' of available GEM-MACH domain')
-  WRITE(*,*) ' Using field ', fieldName, '(', gemMachFieldName, ')'
-  WRITE(*,*) ' Ouputting to ', trim(outDir)
 
-  forecastHour = 18
+     WRITE(*,*) ' Reading compressed netcdf data from ', trim(inDir)
+     WRITE(*,101) start_year, start_mon, start_day, end_year, end_mon, end_day
+101  FORMAT(' Doing ', i4, '-', i2, '-', i2, ' to ', i4, '-', i2, '-', i2)
+     WRITE(*,102) useFractionOfRegion
+102  FORMAT(' Using only 1/', i3, ' of available GEM-MACH domain')
+     WRITE(*,*) ' Using field ', fieldName, '(', gemMachFieldName, ')'
+     WRITE(*,*) ' Ouputting to ', trim(outDir)
 
-  ! Read in a single file to get model domain size
-103 FORMAT(A, i4.4, i2.2, i2.2, i2.2 '_', i6.6, 'p.netcdf4.compressed')
-  WRITE(dataFileName, 103), trim(inDir), start_year, start_mon, start_day, &
-       forecastHour, 60
-  ierr = nf90_opeN( trim(dataFileName), NF90_NOWRITE, ncId )
-  IF (ierr < 0) THEN
-     WRITE(*,*) 'Error while opening ', trim(dataFileName)
-     call MPI_Abort(MPI_COMM_WORLD, 2, IERR)
-  ENDIF
+     forecastHour = 18
 
-  ierr = nf90_inq_varid( ncId, trim(gemMachFieldName), variableId )
-  ierr = nf90_inquire_variable( ncId, variableId, dimIds = dimIds )
-  ierr = nf90_inquire_dimension( ncID, dimIds(1), len = grid_ni )
-  ierr = nf90_inquire_dimension( ncID, dimIds(2), len = grid_nj )
-  ierr = nf90_inquire_dimension( ncID, dimIds(3), len = grid_nt )
+     ! Read in a single file to get model domain size
+103  FORMAT(A, i4.4, i2.2, i2.2, i2.2 '_', i6.6, 'p.netcdf4.compressed')
+     WRITE(dataFileName, 103), trim(inDir), start_year, start_mon, start_day, &
+          forecastHour, 60
+     ierr = nf90_opeN( trim(dataFileName), NF90_NOWRITE, ncId )
+     IF (ierr < 0) THEN
+        WRITE(*,*) 'Error while opening ', trim(dataFileName)
+        call MPI_Abort(MPI_COMM_WORLD, 2, IERR)
+     ENDIF
 
-  ierr = nf90_close( ncId )
+     ierr = nf90_inq_varid( ncId, trim(gemMachFieldName), variableId )
+     ierr = nf90_inquire_variable( ncId, variableId, dimIds = dimIds )
+     ierr = nf90_inquire_dimension( ncID, dimIds(1), len = grid_ni )
+     ierr = nf90_inquire_dimension( ncID, dimIds(2), len = grid_nj )
+     ierr = nf90_inquire_dimension( ncID, dimIds(3), len = grid_nt )
 
-  ! grid_ni = grid_ni / useFractionOfRegion
-  ! grid_nj = grid_nj / useFractionOfRegion
-  grid_ni = useFractionOfRegion
-  grid_nj = useFractionOfRegion
-  numPoints = grid_ni * grid_nj
+     ierr = nf90_close( ncId )
+
+     ! grid_ni = grid_ni / useFractionOfRegion
+     ! grid_nj = grid_nj / useFractionOfRegion
+     if (useFractionOfRegion .ne. -1) then
+        grid_ni = useFractionOfRegion
+        grid_nj = useFractionOfRegion
+     end if
+     numPoints = grid_ni * grid_nj
+  else
+
+     dataFileName = acFileName
+     WRITE(*,*) ' Reading data from ', trim(dataFileName)
+     WRITE(*,*) ' Using field ', trim(ncFieldName)
+     WRITE(*,*) ' Ouputting to ', trim(outDir)
+     ! Open the aircraft data file to get dimensions
+
+     call check( nf90_open( trim(dataFileName), NF90_NOWRITE, ncId ) )
+     
+     WRITE(*,*) ' Using field ',  trim(ncFieldName)
+     WRITE(*,*) ' Ouputting to ', trim(outDir)
+
+     forecastHour = 18
+
+
+     call check( nf90_inq_varid( ncId, trim(ncFieldName), variableId ) )
+     call check( nf90_inquire_variable( ncId, variableId, dimIds = dimIds ) )
+     call check( nf90_inquire_dimension( ncID, dimIds(1), len = grid_ni ) )
+     call check( nf90_inquire_dimension( ncID, dimIds(2), len = grid_nj ) )
+
+     if (useFractionOfRegion .ne. -1) then
+        grid_ni = useFractionOfRegion
+     end if
+     numPoints = grid_ni
+     numSpectral = grid_nj
+     grid_nt = -1
+     
+     call check( nf90_close( ncId ) )
+  end if
 
   IF ( myRank == ROOT) THEN
      write(*,*) 'dims', grid_ni, grid_nj, grid_nt
@@ -332,15 +376,6 @@ program cluster
         
      ENDIF
 
-     ! read in all the time data from start to end
-     start_vec = (/start_year,start_mon,start_day,forecastHour,00,00,00,00/)
-     end_vec   = (/end_year,    end_mon,  end_day,forecastHour,00,00,00,00/)
-     call d2j(start_vec, start_julian, ierr)
-     call d2j(  end_vec,   end_julian, ierr)
-     numDays = int(end_julian - start_julian + 1)
-     numTimesteps = numDays * 24
-
-108  FORMAT(A, i8.8, i2.2 '_', i6.6, 'p.netcdf4.compressed')
 
      ALLOCATE(BUFFER(GRID_NI, GRID_NJ))
 
@@ -357,6 +392,128 @@ program cluster
      TRACER_SUM = 0d0
      TRACER_SQSUM = 0d0
      TRACER_XYSUM = 0d0
+
+     if (is_aircraft_data) then
+        dataFileName = acFileName
+        write(*,*) 'Opening ', trim(dataFileName)
+        ierr = nf90_open( trim(dataFileName), NF90_NOWRITE, ncId)!, & 
+!             comm=MPI_COMM_WORLD, info=MPI_INFO_NULL)
+        IF (ierr < 0) THEN
+           WRITE(*,*) 'Error while opening ', trim(dataFileName), ' ierr = ', ierr
+           call MPI_Abort(MPI_COMM_WORLD, 2, IERR)
+        ENDIF
+        ierr = nf90_inq_varid( ncId, trim(ncFieldName), variableId )
+        IF (ierr < 0) THEN
+           WRITE(*,*) 'Error getting varid ', trim(ncFieldName)
+           call MPI_Abort(MPI_COMM_WORLD, 2, IERR)
+        ENDIF
+        ierr = nf90_inquire_variable( ncId, variableId, dimIds = dimIds )
+        IF (ierr < 0) THEN
+           WRITE(*,*) 'Error getting dimids '
+           call MPI_Abort(MPI_COMM_WORLD, 2, IERR)
+        ENDIF
+        write(*,*) 'Reading ', trim(ncFieldName)
+        ierr = nf90_get_var( ncid, variableId, buffer)
+        IF (ierr < 0) THEN
+           WRITE(*,*) 'Error getting data'
+           call MPI_Abort(MPI_COMM_WORLD, 2, IERR)
+        ENDIF
+        write(*,*) 'Done reading ', trim(ncFieldName)
+        ierr = nf90_close( ncId )
+        IF (ierr < 0) THEN
+           WRITE(*,*) 'Error closing file.'
+           call MPI_Abort(MPI_COMM_WORLD, 2, IERR)
+        ENDIF
+        write(*,*) 'Closed ', trim(dataFileName)
+
+        DO I = 1,numPoints
+           WRITE(*,1111) BUFFER(I,1:10)
+        END DO
+1111    FORMAT(G10.4, 9(', ',G10.4))
+        numTimesteps = numSpectral
+
+        DO IHR = 1, numSpectral
+           !write(*,*) 'IHR = ', IHR
+
+           IF ( tileDissMat ) THEN
+              !$OMP PARALLEL DO                       &
+              !$OMP DEFAULT( SHARED )                 &
+              !$OMP PRIVATE( II, I, J, GRIDI, GRIDJ ) &
+              !$OMP PRIVATE( TRACER_TMP, GRIDI2 )     &
+              !$OMP PRIVATE( GRIDJ2, TRACER_TMP2 )
+              DO II = 1,dissSizeI + dissSizeJ
+                 IF ( II .le. dissSizeI ) THEN
+                    I = II - 1 + dissStartI
+                 ELSE
+                    I = II - 1 - dissSizeI + dissStartJ
+                 ENDIF
+                 TRACER_TMP = BUFFER( I, IHR )
+
+                 TRACER_SUM(II)   = TRACER_SUM(II)   + TRACER_TMP
+                 TRACER_SQSUM(II) = TRACER_SQSUM(II) + TRACER_TMP * TRACER_TMP
+
+                 IF ( II .le. dissSizeI ) THEN
+                    DO JJ = 1,dissSizeJ
+                       J = JJ - 1 + dissStartJ
+                       TRACER_TMP2 = BUFFER( J, IHR )
+
+                       TRACER_XYSUM( II, JJ ) = TRACER_XYSUM( II, JJ ) + &
+                            TRACER_TMP * TRACER_TMP2
+                    ENDDO
+                 ENDIF
+              ENDDO
+              !$OMP END PARALLEL DO
+
+           ELSE
+              !$OMP PARALLEL DO                       &
+              !$OMP DEFAULT( SHARED )                 &
+              !$OMP PRIVATE( II, I, J, GRIDI, GRIDJ ) &
+              !$OMP PRIVATE( TRACER_TMP, GRIDI2 )     &
+              !$OMP PRIVATE( GRIDJ2, TRACER_TMP2 )
+              DO II = 1,numClustersThisNode
+                 I = myClusters(II)
+                 ! GRIDI = (I - 1) / GRID_NJ + 1
+                 ! GRIDJ = (I - 1) - (GRIDI - 1) * GRID_NJ + 1
+                 TRACER_TMP = BUFFER( I, IHR )
+
+                 DO J = 1,numPoints
+                    ! GRIDI2 = (J - 1) / GRID_NJ + 1
+                    ! GRIDJ2 = (J - 1) - ( GRIDI2 - 1 ) * GRID_NJ + 1
+                    TRACER_TMP2 = BUFFER( J, IHR )
+
+                    TRACER_XYSUM( II, J ) = TRACER_XYSUM( II, J ) + &
+                         TRACER_TMP * TRACER_TMP2
+                 ENDDO
+              ENDDO
+              !$OMP END PARALLEL DO
+
+              !$OMP PARALLEL DO                       &
+              !$OMP DEFAULT( SHARED )                 &
+              !$OMP PRIVATE( I, GRIDI, GRIDJ )        &
+              !$OMP PRIVATE( TRACER_TMP )  
+              DO I = 1,numPoints
+                 ! GRIDI = (I - 1) / GRID_NJ + 1
+                 ! GRIDJ = (I - 1) - (GRIDI - 1) * GRID_NJ + 1
+                 TRACER_TMP = BUFFER( I, IHR )
+
+                 TRACER_SUM( I )   = TRACER_SUM( I )   + TRACER_TMP
+                 TRACER_SQSUM( I ) = TRACER_SQSUM( I ) + TRACER_TMP * TRACER_TMP
+              ENDDO
+              !$OMP END PARALLEL DO
+           ENDIF ! ( tileDissMat )
+        ENDDO
+     else
+
+
+        ! read in all the time data from start to end
+        start_vec = (/start_year,start_mon,start_day,forecastHour,00,00,00,00/)
+        end_vec   = (/end_year,    end_mon,  end_day,forecastHour,00,00,00,00/)
+        call d2j(start_vec, start_julian, ierr)
+        call d2j(  end_vec,   end_julian, ierr)
+        numDays = int(end_julian - start_julian + 1)
+        numTimesteps = numDays * 24
+
+108  FORMAT(A, i8.8, i2.2 '_', i6.6, 'p.netcdf4.compressed')
 
      DO IDAY = 1, numDays
         call j2d(start_julian+IDAY*1.0, current_date, ierr)
@@ -462,7 +619,7 @@ program cluster
            ENDIF ! ( tileDissMat )
         ENDDO
      ENDDO
-
+     end if ! if (is_aircraft_data)
 
      IF ( tileDissMat ) THEN
         write(*,*) ' Allocating dissMat '
@@ -782,9 +939,10 @@ program cluster
 
      endTimer = MPI_Wtime()
      WRITE(*,*) 'Loading dissimilarity matrix took ', endTimer - startTimer, ' seconds'
+     
+     RMIN = 1d0 - RMIN
+     RMAX = 1d0 - RMAX
   ENDIF
-  RMIN = 1d0 - RMIN
-  RMAX = 1d0 - RMAX
 
   WRITE(*,*) 'R ranged from ', RMIN, ' to ', RMAX
 
@@ -1283,5 +1441,14 @@ CONTAINS
     DOUBLE PRECISION, INTENT(IN) :: NODE1(:), NODE2(:)
     GREATER2 = NODE1(2) < NODE2(2)
   END FUNCTION GREATER2
+  
+  subroutine check(status)
+    integer, intent ( in) :: status
+
+    if(status /= nf90_noerr) then 
+       print *, trim(nf90_strerror(status))
+       stop "Stopped"
+    end if
+  end subroutine check
 
 END PROGRAM CLUSTER
