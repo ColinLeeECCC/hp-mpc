@@ -31,3 +31,15 @@
 *.out
 *.app
 *.abs
+
+# Timing profile data files
+*.dat
+
+# Extra input config files
+*.lst
+
+# Output directories
+output*/
+
+# Input files
+*.nc4
