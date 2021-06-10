@@ -312,10 +312,10 @@ program cluster
   ! more than happy to go as big as we would like, but the problem is
   ! when we try to MPI_SET_VIEW we can overflow MPI_OFFSET_KIND. The limit seems
   ! to be
-
-  WRITE(dataFileName,107) trim(outDir), start_year, start_mon,     &
-       start_day, end_year, end_mon, end_day, forecastHour,  &
-       grid_ni, grid_nj
+  call get_dissMat_filename(dataFileName, outDir, is_aircraft_data, grid_ni, &
+       grid_nj, start_year, start_mon, start_day, end_year, end_mon,         &
+       end_day, forecastHour)
+  
   ! in most cases, we will load the dissMatrix from file, either
   ! because it already exists, or because we computed it tilewise and
   ! saved it out to be read in by the appropriate nodes
@@ -425,11 +425,13 @@ program cluster
            call MPI_Abort(MPI_COMM_WORLD, 2, IERR)
         ENDIF
         write(*,*) 'Closed ', trim(dataFileName)
-
-        DO I = 1,numPoints
-           WRITE(*,1111) BUFFER(I,1:10)
-        END DO
-1111    FORMAT(G10.4, 9(', ',G10.4))
+        
+        IF ( useFractionOfRegion .ne. -1 ) then
+           DO I = 1,numPoints
+              WRITE(*,1111) BUFFER(I,1:10)
+           END DO
+1111       FORMAT(G11.4, 9(', ',G11.4))
+        endif
         numTimesteps = numSpectral
 
         DO IHR = 1, numSpectral
@@ -659,7 +661,6 @@ program cluster
                  WRITE(*,*) 'SXY = ', SXY, 'SXX = ', SXX, 'SYY = ', SYY
               ELSE
                  R = SXY / SQRT( SXX * SYY )
-                 dissMat(II,JJ) = -1 * ( 1 - R )
                  IF ( R < -1d0 .or. R > 1d0 ) THEN
                     WRITE(*,*) 'Got weird R at ',II, '(', N, '),', JJ
                     WRITE(*,*) ' R = ', R
@@ -671,6 +672,7 @@ program cluster
                  IF (R < RMIN) RMIN = R
                  IF (R > RMAX) RMAX = R
               ENDIF
+              dissMat(II,JJ) = ( 1d0 - R )
 
            ENDDO
 
@@ -678,9 +680,9 @@ program cluster
         !$OMP END PARALLEL DO
 
         ! Now we save out the tile of the dissimilarity matrix we computed.
-        WRITE(dataFileName,107) trim(outDir), start_year, start_mon,     &
-             start_day, end_year, end_mon, end_day, forecastHour,  &
-             grid_ni, grid_nj
+        call get_dissMat_filename(dataFileName, outDir, is_aircraft_data,  &
+             grid_ni, grid_nj, start_year, start_mon, start_day,           &
+             end_year, end_mon, end_day, forecastHour)
 
         call MPI_FILE_OPEN(MPI_COMM_WORLD, trim(dataFileName), MPI_MODE_CREATE + MPI_MODE_WRONLY, MPI_INFO_NULL, mpi_uid, ierr)
         IF (IERR .ne. MPI_SUCCESS) THEN
@@ -798,7 +800,7 @@ program cluster
               ENDIF
 
               ! WRITE(*,*) ' Storing in Node ', II, I
-              NODES(II,I,:) = (/ -1d0 * (1d0 - R), real(I,8) /)
+              NODES(II,I,:) = (/ (1d0 - R), real(I,8) /)
 
 112           FORMAT(' Inserting <', F6.3, ', ', I2,'> into queue ', I2)
               ! WRITE(*,112) NODES(II,I,1), INT(NODES(II,I,2)), II
@@ -949,11 +951,9 @@ program cluster
   if (saveDissMatrix) THEN
      startTimer = MPI_Wtime()
      WRITE(*,*) 'Saving dissimilarity matrix...'
-     WRITE(dataFileName,107) trim(outDir), start_year, start_mon,     &
-          start_day, end_year, end_mon, end_day, forecastHour,  &
-          grid_ni, grid_nj
-107  FORMAT(a,i4.4,i2.2,i2.2, '_', i4.4,i2.2,i2.2,'_', i2.2, '_', &
-          i4.4, 'x', i4.4, '_mpio.bin')
+     call get_dissMat_filename(dataFileName,outDir, is_aircraft_data,   &
+          grid_ni, grid_nj, start_year, start_mon, start_day,           &
+          end_year, end_mon, end_day, forecastHour)
 
      WRITE(*,*) 'Opening'
      call MPI_FILE_OPEN(MPI_COMM_WORLD, trim(dataFileName), MPI_MODE_CREATE + MPI_MODE_WRONLY, MPI_INFO_NULL, mpi_uid, ierr)
@@ -1254,6 +1254,8 @@ program cluster
            NODE1(:) = NODESK1(:,I)
            NODE2(:) = NODESK2(:,I)
 
+           ! R = (clusterSize(K1) * NODE1(1) + clusterSize(K2) * NODE2(1)) &
+           !     / ( clusterSize(K1) + clusterSize(K2) )
            R = MIN( NODE1(1), NODE2(1) )
 
            IF ( K1ThisRank ) THEN
@@ -1315,6 +1317,31 @@ program cluster
   call MPI_FINALIZE(IERR)
 
 CONTAINS
+  subroutine get_dissMat_filename(fileName, outDir, is_aircraft_data, &
+       grid_ni, grid_nj, start_year, start_mon, start_day, end_year,  &
+       end_mon, end_day, forecastHour)
+
+    character(256), intent(out) :: fileName
+    character(256), intent(in)  :: outDir
+    logical, intent(in)         :: is_aircraft_data
+    integer, intent(in)         :: grid_ni, grid_nj
+    integer, intent(in)         :: start_year, start_mon, start_day
+    integer, intent(in)         :: end_year, end_mon, end_day
+    integer, intent(in)         :: forecastHour
+    
+107 FORMAT(a,i4.4,i2.2,i2.2, '_', i4.4,i2.2,i2.2,'_', i2.2, '_', &
+         i4.4, 'x', i4.4, '_mpio.bin')
+108 FORMAT(a, i4.4, '_mpio.bin')
+
+  if (is_aircraft_data) then
+     WRITE(fileName,108) trim(outDir), grid_ni
+  else
+     WRITE(dataFileName,107) trim(outDir), start_year, start_mon,     &
+          start_day, end_year, end_mon, end_day, forecastHour,  &
+          grid_ni, grid_nj
+  end if
+  end subroutine get_dissMat_filename
+
 
   subroutine d2j(dat,julian,ierr)
     !---------------------------------------------------------------
