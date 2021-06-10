@@ -17,6 +17,9 @@ program csv_to_netcdf
   integer       :: nPts, nSpec
   real, dimension(:,:), allocatable &
                 :: massSpec
+  real, dimension(:), allocatable &
+                :: minMS, maxMS, meanMS
+  real          :: tmp
   
   character(:), allocatable :: line, name, a(:)
   character(20) :: fmt
@@ -64,7 +67,7 @@ program csv_to_netcdf
   ! it has
   nrow = 0
   ncol = 0
-  do while (readline(10, line))
+  OUTER: do while (readline(10, line))
      nrow = nrow + 1
 
      call split(line, a)
@@ -77,8 +80,33 @@ program csv_to_netcdf
      elseif (nrow == 2) then
         ncol = size(a)
         write(fmt, "('(',G0,'(G0,:,''',A,'''))')") ncol, ","
+        allocate(minMS(ncol))
+        allocate(maxMS(ncol))
+        allocate(meanMS(ncol))
+        minMS(:) = 99999.9
+        maxMS(:) = -99999.9
+        meanMS(:) = 0.0        
+     else
+        do i = 1,ncol
+           read(a(i), *, iostat=status) tmp
+           if (status .lt. 0) then
+              print "(A, ' ', G0)", "Encountered EOF at position ", i, " in row ", nrow
+           end if
+           if (tmp .eq. -999999.0) then
+              write(*,121) a(i), tmp, nrow, i
+121           FORMAT('Found NaN (', a, ',', g11.4, ') at row ', i5, ' column ', i3)
+              cycle OUTER
+           end if
+           if (tmp .lt. minMS(i)) minMS(i) = tmp
+           if (tmp .gt. maxMS(i)) maxMS(i) = tmp
+           meanMS(i) = meanMS(i) + tmp              
+        end do
      end if
+  end do OUTER
+  do i = 1, ncol
+     meanMS(i) = meanMS(i) / (nrow - 2)
   end do
+  
   ! Allocate an array to save the entire dataset
   nSpec = ncol
   nPts  = nrow - 1
@@ -98,6 +126,9 @@ program csv_to_netcdf
            read(a(i), *, iostat=status) massSpec(nrow,i)
            if (status .lt. 0) then
               print "(A, ' ', G0)", "Encountered EOF at position ", i, " in row ", nrow
+           end if
+           if (massSpec(nrow, i) .ne. -999999.0) then
+              massSpec(nrow,i) = (massSpec(nrow,i) - minMS(i)) / (maxMS(i) - minMS(i))
            end if
         end do
         if ( nrow < 11 ) then
