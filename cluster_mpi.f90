@@ -111,6 +111,12 @@ program cluster
   logical                    :: K1ThisRank, K2ThisRank
   integer                    :: K1Rank, K2Rank
 
+  ! Linkage variables
+  integer                    :: linkage
+  real*8                     :: D_IJ, alpha1, alpha2
+  real*8                     :: beta, gamma
+  
+
   ! MPI timing variables
   real*8                     :: startTimer, endTimer
 
@@ -176,11 +182,13 @@ program cluster
      READ(fu_in, '(a256)') inDir ! data where compressed netcdf GEM-MACH data is stored
      READ(fu_in, '(i4,2(1x,i2.2))') start_year, start_mon, start_day
      READ(fu_in, '(i4,2(1x,i2.2))')   end_year,   end_mon,   end_day
+     READ(fu_in, *) linkage
      READ(fu_in, *) useFractionOfRegion
      READ(fu_in, '(a8)') gemMachFieldName
      READ(fu_in, '(a8)') fieldName
   else
      READ(fu_in, '(a256)') acFileName ! data where compressed netcdf GEM-MACH data is stored
+     READ(fu_in, *) linkage
      READ(fu_in, *) useFractionOfRegion
      READ(fu_in, '(a256)') ncFieldName
   end if
@@ -191,6 +199,11 @@ program cluster
      if ( ierr .eq. 0 ) THEN
         only_save_dissMat = tmpLogical
      ENDIF
+  endif
+
+  if (linkage .lt. 0 .or. linkage .gt. 6) THEN
+     WRITE(*,*) 'Linkage must be between 0 and 6, inclusive, not ', linkage
+     call MPI_Abort(MPI_COMM_WORLD, 7, IERR)
   endif
 
   ! make sure outDir ends in a '/'
@@ -312,9 +325,10 @@ program cluster
   ! more than happy to go as big as we would like, but the problem is
   ! when we try to MPI_SET_VIEW we can overflow MPI_OFFSET_KIND. The limit seems
   ! to be
-  call get_dissMat_filename(dataFileName, outDir, is_aircraft_data, grid_ni, &
-       grid_nj, start_year, start_mon, start_day, end_year, end_mon,         &
-       end_day, forecastHour)
+  call get_dissMat_filename(dataFileName, outDir, is_aircraft_data,     &
+                            linkage, grid_ni, grid_nj,                  &
+                            start_year, start_mon, start_day,           &
+                            end_year, end_mon, end_day, forecastHour   )
   
   ! in most cases, we will load the dissMatrix from file, either
   ! because it already exists, or because we computed it tilewise and
@@ -654,11 +668,13 @@ program cluster
                    ( tracer_sum(II) * tracer_sum(II) )
               ! WRITE(*,*) '   ', SXX, ', ', SYY, ', ', SXY
               IF ( SXX .eq. 0d0 .or. SYY .eq. 0d0 ) THEN
-                 R = 0d0
-                 WRITE(*,*) 'Got bad statistics at ', N, '(', II, '), ', JJ
-                 WRITE(*,*) 'Ex = ', tracer_sum(II), 'Ey = ', tracer_sum(JJ + dissSizeI)
-                 WRITE(*,*) 'Ex2 = ', tracer_sqsum(II), 'Ey2 = ', tracer_sqsum(JJ + dissSizeI)
-                 WRITE(*,*) 'SXY = ', SXY, 'SXX = ', SXX, 'SYY = ', SYY
+                 R = -1d0
+                 if (.not. is_aircraft_data) then
+                    WRITE(*,*) 'Got bad statistics at ', N, '(', II, '), ', JJ
+                    WRITE(*,*) 'Ex = ', tracer_sum(II), 'Ey = ', tracer_sum(JJ + dissSizeI)
+                    WRITE(*,*) 'Ex2 = ', tracer_sqsum(II), 'Ey2 = ', tracer_sqsum(JJ + dissSizeI)
+                    WRITE(*,*) 'SXY = ', SXY, 'SXX = ', SXX, 'SYY = ', SYY
+                 end if
               ELSE
                  R = SXY / SQRT( SXX * SYY )
                  IF ( R < -1d0 .or. R > 1d0 ) THEN
@@ -681,7 +697,7 @@ program cluster
 
         ! Now we save out the tile of the dissimilarity matrix we computed.
         call get_dissMat_filename(dataFileName, outDir, is_aircraft_data,  &
-             grid_ni, grid_nj, start_year, start_mon, start_day,           &
+             linkage, grid_ni, grid_nj, start_year, start_mon, start_day,  &
              end_year, end_mon, end_day, forecastHour)
 
         call MPI_FILE_OPEN(MPI_COMM_WORLD, trim(dataFileName), MPI_MODE_CREATE + MPI_MODE_WRONLY, MPI_INFO_NULL, mpi_uid, ierr)
@@ -780,11 +796,13 @@ program cluster
 
               ! WRITE(*,*) '   ', SXX, ', ', SYY, ', ', SXY
               IF ( SXX .eq. 0d0 .or. SYY .eq. 0d0 ) THEN
-                 R = 0d0
-                 WRITE(*,*) 'Got bad statistics at ', N, ',', I
-                 WRITE(*,*) 'Ex = ', tracer_sum(N), 'Ey = ', tracer_sum(I)
-                 WRITE(*,*) 'Ex2 = ', tracer_sqsum(N), 'Ey2 = ', tracer_sqsum(I)
-                 WRITE(*,*) 'SXY = ', SXY, 'SXX = ', SXX, 'SYY = ', SYY
+                 R = -1d0
+                 if (.not. is_aircraft_data) then
+                    WRITE(*,*) 'Got bad statistics at ', N, ',', I
+                    WRITE(*,*) 'Ex = ', tracer_sum(N), 'Ey = ', tracer_sum(I)
+                    WRITE(*,*) 'Ex2 = ', tracer_sqsum(N), 'Ey2 = ', tracer_sqsum(I)
+                    WRITE(*,*) 'SXY = ', SXY, 'SXX = ', SXX, 'SYY = ', SYY
+                 endif
               ELSE
                  R = SXY / SQRT( SXX * SYY )
                  IF ( R < -1d0 .or. R > 1d0 ) THEN
@@ -952,7 +970,7 @@ program cluster
      startTimer = MPI_Wtime()
      WRITE(*,*) 'Saving dissimilarity matrix...'
      call get_dissMat_filename(dataFileName,outDir, is_aircraft_data,   &
-          grid_ni, grid_nj, start_year, start_mon, start_day,           &
+          linkage, grid_ni, grid_nj, start_year, start_mon, start_day,  &
           end_year, end_mon, end_day, forecastHour)
 
      WRITE(*,*) 'Opening'
@@ -1008,6 +1026,10 @@ program cluster
   ENDIF
 
   startTimer = MPI_Wtime()
+
+  ! to save time on some metrics, save the Lance-Williams coefficients
+  ! in advance
+  call init_linkage(linkage)
 
   ! Need to iterate this many times to get to a single cluster
   DO K = 1, numPoints-1
@@ -1096,7 +1118,9 @@ program cluster
         call MPI_Abort(MPI_COMM_WORLD, 1, IERR)
      ENDIF
      NODE1(1) = RMIN
-     
+     ! save the distance of the clustered pair
+     D_IJ     = RMIN
+
      IF ( myRank .eq. ROOT ) THEN
         clusterPairs(K,1) = k1
         clusterPairs(K,2) = k2
@@ -1231,10 +1255,12 @@ program cluster
               WRITE(*,*) ' M = ', M, ' size = ', PQueue(II)%SIZE()
            ENDIF
 
-           ! R = (clusterSize(K1) * NODE1(1) + clusterSize(K2) * NODE2(1)) &
-           !      / ( clusterSize(K1) + clusterSize(K2) )
-           R = MIN( NODE1(1), NODE2(1) )
-
+           ! calculate the new distance metric between the combined clusters
+           ! K1 and K2 and the old cluster II
+           call calc_new_distance( linkage, R, NODE1(1), NODE2(1), D_IJ,     &
+                                   clusterSize(K1), clusterSize(K2),         &
+                                   clusterSize(I)                           )
+           
            NODES(II,K1,1) = R
 116        FORMAT('PQueue(',i2,')%INSERT( [', f7.4, ', ', i2, '])')
            ! WRITE(*,116) I, R, K1
@@ -1254,9 +1280,11 @@ program cluster
            NODE1(:) = NODESK1(:,I)
            NODE2(:) = NODESK2(:,I)
 
-           ! R = (clusterSize(K1) * NODE1(1) + clusterSize(K2) * NODE2(1)) &
-           !     / ( clusterSize(K1) + clusterSize(K2) )
-           R = MIN( NODE1(1), NODE2(1) )
+           ! calculate the new distance metric between the combined clusters
+           ! K1 and K2 and the old cluster II
+           call calc_new_distance( linkage, R, NODE1(1), NODE2(1), D_IJ,     &
+                                   clusterSize(K1), clusterSize(K2),         &
+                                   clusterSize(I)                           )
 
            IF ( K1ThisRank ) THEN
               ! WRITE(*,116) K1, R, I+J
@@ -1299,11 +1327,16 @@ program cluster
   countStart = countEnd
 
   IF ( myRank .eq. ROOT ) THEN
-     WRITE(dataFileName,126) trim(outDir), start_year, start_mon,     &
-          start_day, end_year, end_mon, end_day, forecastHour,  &
-          grid_ni, grid_nj
-126  FORMAT(a,i4.4,i2.2,i2.2, '_', i4.4,i2.2,i2.2,'_', i2.2, '_', &
+     if (is_aircraft_data) then
+        WRITE(dataFileName,129) trim(outDir), grid_ni, linkage
+     else
+        WRITE(dataFileName,126) trim(outDir), start_year, start_mon,     &
+             start_day, end_year, end_mon, end_day, forecastHour,  &
+             linkage, grid_ni, grid_nj
+     end if
+126  FORMAT(a,i4.4,i2.2,i2.2, '_', i4.4,i2.2,i2.2,'_', 2(i2.2, '_'), &
           i4.4, 'x', i4.4, '_clusters.dat')
+129  FORMAT(a,i7.7,'_',i2.2, '_clusters.dat')
      open( uid, file=trim(dataFileName), form='formatted', action='write', &
           status='replace', iostat=ierr)
      write(uid,*) 'xx\tlki\tlkj'
@@ -1318,31 +1351,122 @@ program cluster
 
 CONTAINS
   subroutine get_dissMat_filename(fileName, outDir, is_aircraft_data, &
-       grid_ni, grid_nj, start_year, start_mon, start_day, end_year,  &
-       end_mon, end_day, forecastHour)
+       linkage, grid_ni, grid_nj, start_year, start_mon, start_day,   &
+       end_year, end_mon, end_day, forecastHour)
 
     character(256), intent(out) :: fileName
     character(256), intent(in)  :: outDir
     logical, intent(in)         :: is_aircraft_data
+    integer, intent(in)         :: linkage
     integer, intent(in)         :: grid_ni, grid_nj
     integer, intent(in)         :: start_year, start_mon, start_day
     integer, intent(in)         :: end_year, end_mon, end_day
     integer, intent(in)         :: forecastHour
-    
-107 FORMAT(a,i4.4,i2.2,i2.2, '_', i4.4,i2.2,i2.2,'_', i2.2, '_', &
-         i4.4, 'x', i4.4, '_mpio.bin')
-108 FORMAT(a, i4.4, '_mpio.bin')
 
-  if (is_aircraft_data) then
-     WRITE(fileName,108) trim(outDir), grid_ni
-  else
-     WRITE(dataFileName,107) trim(outDir), start_year, start_mon,     &
-          start_day, end_year, end_mon, end_day, forecastHour,  &
-          grid_ni, grid_nj
-  end if
+107 FORMAT(a,i4.4,i2.2,i2.2, '_', i4.4,i2.2,i2.2,'_', 2(i2.2, '_'), &
+         i4.4, 'x', i4.4, '_mpio.bin')
+108 FORMAT(a, i7.7,'_',i2.2, '_mpio.bin')
+
+    if (is_aircraft_data) then
+       WRITE(fileName,108) trim(outDir), grid_ni, linkage
+    else
+       WRITE(dataFileName,107) trim(outDir), start_year, start_mon,     &
+            start_day, end_year, end_mon, end_day, forecastHour,  &
+            linkage, grid_ni, grid_nj
+    end if
   end subroutine get_dissMat_filename
 
+  subroutine init_linkage(linkage)
+    ! Set up the variables for calculating the combined cluster
+    ! distance metric based on one of 7 linkage methods
 
+    ! Integer from 0-6 indicating which linkage
+    integer, intent(in) :: linkage
+
+    ! Single linkage, complete linkage and average linkage
+    ! all have non-Lance-Williams update methods which
+    ! should be faster, so we just skip those. Centroid
+    ! linkage and Ward's method have dynamic coefficients
+    ! so we also won't initialize those here.
+    ! 
+    ! All the methods we're using the Lance-Williams
+    ! equation for have gamma=0, so we're just gonna leave
+    ! that term out.
+    
+       ! Weighted linkage
+    if ( linkage .eq. 3 ) then
+       alpha1 = 0.5
+       alpha2 = 0.5
+       beta   = 0.0
+       ! Median linkage
+    else if (linkage .eq. 5 ) then
+       alpha1 = 0.5
+       alpha2 = 0.5
+       beta   = -0.25
+    else if (linkage .lt. 0 .or. linkage .gt. 6) then
+       WRITE(*,*) 'ERROR in INIT_LINKAGE. Linkage = ', linkage, ' not supported.'
+       call MPI_Abort(MPI_COMM_WORLD, 7, IERR)
+    endif
+  end subroutine init_linkage
+
+  subroutine calc_new_distance(linkage, D_IJK, D_IK, D_JK, D_IJ, N_I, N_J, N_K)
+    ! update the distance between new cluster IJ and old cluster K from
+    ! the old distances betwen I and K and J and K
+
+    ! linkage method 0-6
+    integer, intent(in)       :: linkage
+    ! return value, new distance between IJ and K
+    real*8, intent(out)        :: D_IJK
+    ! old distances between I and K, J and K, and I and J
+    real*8, intent(in)        :: D_IK, D_JK, D_IJ
+    ! cluster sizes of I, J and K
+    integer, intent(in)       :: N_I, N_J, N_K
+
+    select case (LINKAGE)
+       ! Single linkage
+    case (0)
+       D_IJK = MIN( D_IK, D_JK )
+       ! Complete linkage
+    case (1)
+       D_IJK = MAX( D_IK, D_JK )
+       ! Average linkage
+    case (2)
+       D_IJK =  ( N_I * D_IK + N_J * D_JK ) &
+            / ( N_I + N_J )
+       ! Weighted linkage
+    case (3)
+       D_IJK = alpha1 * D_IK + alpha2 * D_JK + &
+               beta * D_IJ
+       ! Centroid linkage
+    case (4)
+       alpha1 = N_I / ( N_I + N_J )
+       alpha2 = N_J / ( N_I + N_J )
+       beta   = - N_I * N_J / &
+            ( N_I + N_J ) ** 2
+       D_IJK = alpha1 * D_IK + alpha2 * D_JK + &
+               beta * D_IJ
+       ! Median linkage
+    case (5)
+       D_IJK = alpha1 * D_IK + alpha2 * D_JK + &
+               beta * D_IJ
+       ! Ward's linkage
+    case (6)
+       alpha1 = ( N_I + N_K ) / &
+            ( N_I + N_J + N_K )
+       alpha2 = ( N_J + N_K ) / &
+            ( N_I + N_J + N_K )
+       beta   = - N_K / &
+            ( N_I + N_J + N_K )
+       D_IJK = alpha1 * D_IK + alpha2 * D_JK + &
+               beta * D_IJ
+       ! Default to single linkage
+    case default
+       WRITE(*,*) 'ERROR in calc_new_distance. Linkage = ', linkage, ' not supported.'
+       call MPI_Abort(MPI_COMM_WORLD, 7, IERR)
+    end select
+  end subroutine calc_new_distance
+    
+    
   subroutine d2j(dat,julian,ierr)
     !---------------------------------------------------------------
     ! * Author:    John S. Urban
