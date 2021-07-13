@@ -12,7 +12,12 @@ parser.add_argument('dendrogram_file',
                     help='File containing dendrogram data.')
 parser.add_argument('spectra_file', 
                     help='File containing mass spec data.')
+parser.add_argument('--output-filename', 
+                    help='File name for saving output figure.')
+parser.add_argument('--linkage', type=int, 
+                    help='Linkage for title (integer 0-6).')
 
+linkages = ['Single', 'Complete', 'Average', 'Weighted', 'Centroid', 'Median', 'Ward''s']
 
 args = parser.parse_args()
 
@@ -92,8 +97,43 @@ for i in range(num_clusters):
 for i in range(args.N):
     cluster_spectra[i, :] = cluster_spectra[i, :] / cluster_size[i]
 
+bg_cluster_i = np.argmax(cluster_size)
+bg_cluster = cluster_spectra[bg_cluster_i, :]
+bg_size    = cluster_size[bg_cluster_i]
+cluster_spectra = np.delete(cluster_spectra, bg_cluster_i, 0)
+cluster_size    = np.delete(cluster_size,    bg_cluster_i)
+dl = np.percentile(bg_cluster, 10)
+bg_cluster = np.maximum(bg_cluster, dl)
+cluster_spectra = np.maximum(cluster_spectra, dl)
+
+
+for i in range(cluster_spectra.shape[0]):
+    cluster_spectra[i, :] = (cluster_spectra[i, :] - bg_cluster) / bg_cluster
+
 import matplotlib.pyplot as plt
 
-plt.plot(range(1,cluster_spectra.shape[1]+1), cluster_spectra.T)
-plt.legend(['{:d} ({:.0f})'.format(x, cluster_size[x]) for x in range(args.N)])
-plt.show()
+x = np.repeat(range(1,cluster_spectra.shape[1]+1), cluster_spectra.shape[0]).T.reshape(cluster_spectra.shape[1::-1]).T
+x = x - np.repeat(np.arange(cluster_spectra.shape[0]) / cluster_spectra.shape[0] - 0.5, x.shape[1]).reshape(x.shape)
+
+# plt.plot(x.T, cluster_spectra.T, linewidth=0.5)
+# plt.legend(['{:d} ({:.0f})'.format(x, cluster_size[x]) for x in range(args.N)])
+# plt.show()
+
+figsize = (20,5)
+h = plt.figure(figsize=figsize, dpi=196, tight_layout=True)
+
+w = 1.0 / (x.shape[0] + 1.0)
+for i in range(x.shape[0]):
+    ax = plt.bar(x[i,:], cluster_spectra[i,:], w)
+    
+title = 'Relative Diff from Bg Cluster ({:d})'.format(int(bg_size))
+if (args.linkage is not None):
+    title = title + ': {:s} Linkage'.format(linkages[args.linkage])
+
+plt.title(title)
+plt.legend(['{:d} ({:.0f})'.format(x, cluster_size[x]) for x in range(len(cluster_size))])
+
+if (args.output_filename is not None):
+    plt.savefig(args.output_filename)
+else:
+    plt.show()

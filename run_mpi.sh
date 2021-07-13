@@ -59,4 +59,4 @@ r.run_in_parallel -npex ${NODESX} -npey ${NODESY} -inorder -pgm \${wrkDir}/clust
 EOD
 # on ppp3 -cpus 40x1 -cm 5G gives only one node; as a workaround use -cpus 44x44 -cm 210G
 
-ord_soumet jobscript.sh -mach eccc-ppp3 -cpus ${NODESX}x${NODESY}x${OMPTHREADS} -cm ${MEM} -waste 90 -w ${WTIME} -mpi -jn colin_mpi -listing /space/hall3/sitestore/eccc/aq/r1/cle001/src/hierarchical-clustering/listings -args $@
+ord_soumet jobscript.sh -mach eccc-ppp4 -cpus ${NODESX}x${NODESY}x${OMPTHREADS} -cm ${MEM} -waste 90 -w ${WTIME} -mpi -jn colin_mpi -listing /space/hall3/sitestore/eccc/aq/r1/cle001/src/hierarchical-clustering/listings -args $@

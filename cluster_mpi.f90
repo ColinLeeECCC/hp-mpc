@@ -321,6 +321,23 @@ program cluster
   WRITE(*,*) '      ', myClusters(1), ', ', myClusters(2), ', ', &
        myClusters(3), '...,', myClusters(numClustersThisNode)
 
+  ! Okay,this is where things get a little bit mind-bending. We need to allocate
+  ! a priority queue for each MPI process that will initially store 1 cluster
+  ! for each pair. The cluster will get an ID, a score, and a cardinality. The
+  ! priority queue sorts the clusters by score and returns the minimum quickly.
+  ! As points are clustered, we need to store how many points are in a cluster
+  ! so we can average the scores appropriately.
+  WRITE(*,*) ' Allocating pQueue with len=', numPoints
+  ALLOCATE(PQueue(numClustersThisNode))
+  ALLOCATE(NODES(numClustersThisNode, numPoints,2))
+  ALLOCATE(LIVE(numPoints))
+  ALLOCATE(heapIdx(numClustersThisNode,numPoints))
+  ALLOCATE(clusterSize(numPoints))
+  WRITE(*,*) ' Allocated'
+
+  clusterSize = 1
+  live = .true.
+
   ! for very large numPoints, our files get too big. The file system seems
   ! more than happy to go as big as we would like, but the problem is
   ! when we try to MPI_SET_VIEW we can overflow MPI_OFFSET_KIND. The limit seems
@@ -749,23 +766,7 @@ program cluster
         RMIN = 9.999d9
         RMAX = -9.999d9
         Nt = real(numTimesteps, 8)
-        !
-        ! Okay,this is where things get a little bit mind-bending. We need to allocate
-        ! a priority queue for each MPI process that will initially store 1 cluster
-        ! for each pair. The cluster will get an ID, a score, and a cardinality. The
-        ! priority queue sorts the clusters by score and returns the minimum quickly.
-        ! As points are clustered, we need to store how many points are in a cluster
-        ! so we can average the scores appropriately.
-        WRITE(*,*) ' Allocating pQueue with len=', numPoints
-        ALLOCATE(PQueue(numClustersThisNode))
-        ALLOCATE(NODES(numClustersThisNode, numPoints,2))
-        ALLOCATE(LIVE(numPoints))
-        ALLOCATE(heapIdx(numClustersThisNode,numPoints))
-        ALLOCATE(clusterSize(numPoints))
-        WRITE(*,*) ' Allocated'
 
-        clusterSize = 1
-        live = .true.
         ! I have an inkling that doing this in the OMP loop is causing
         ! a runtime error
         DO N = 1,numClustersThisNode
@@ -851,17 +852,6 @@ program cluster
 
   IF ( loadDissMatrix ) THEN
      startTimer = MPI_Wtime()
-     WRITE(*,*) ' Loading dissimilarity matrix...'
-     WRITE(*,*) ' Allocating pQueue with len=', numClustersThisNode
-     ALLOCATE(PQueue(numClustersThisNode))
-     ALLOCATE(NODES(numClustersThisNode, numPoints,2))
-     ALLOCATE(LIVE(numPoints))
-     ALLOCATE(heapIdx(numClustersThisNode,numPoints))
-     ALLOCATE(clusterSize(numPoints))
-     WRITE(*,*) ' Allocated'
-
-     clusterSize = 1
-     live = .true.
 
      WRITE(*,*) 'Opening'
 
