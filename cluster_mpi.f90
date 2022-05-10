@@ -201,6 +201,7 @@ program cluster
      ENDIF
   endif
 
+  close(fu_in)
   if (linkage .lt. 0 .or. linkage .gt. 6) THEN
      WRITE(*,*) 'Linkage must be between 0 and 6, inclusive, not ', linkage
      call MPI_Abort(MPI_COMM_WORLD, 7, IERR)
@@ -223,7 +224,7 @@ program cluster
      WRITE(*,101) start_year, start_mon, start_day, end_year, end_mon, end_day
 101  FORMAT(' Doing ', i4, '-', i2, '-', i2, ' to ', i4, '-', i2, '-', i2)
      WRITE(*,102) useFractionOfRegion
-102  FORMAT(' Using only 1/', i3, ' of available GEM-MACH domain')
+102  FORMAT(' Using only ', i3, 'x', i3, ' cells of available GEM-MACH domain')
      WRITE(*,*) ' Using field ', fieldName, '(', gemMachFieldName, ')'
      WRITE(*,*) ' Ouputting to ', trim(outDir)
 
@@ -753,7 +754,7 @@ program cluster
                    ' at step ', II, ' of ', dissSizeI
               call MPI_Abort(MPI_COMM_WORLD, 4, ierr)
            ENDIF
-           WRITE(*,*) ' Wrote ', readCount, ' doubles to file.'
+           ! WRITE(*,*) ' Wrote ', readCount, ' doubles to file.'
         ENDDO
         call MPI_File_Close( mpi_uid, ierr )
         WRITE(*,*) 'Finished writing dissimilarity matrix. File closed.'
@@ -881,7 +882,7 @@ program cluster
      RMIN = 9.999d9
      RMAX = -9.999d9
 
-     clusterPrintPoint = int(numClustersThisNode / 10d0)
+     clusterPrintPoint = max(1, int(numClustersThisNode / 10d0))
     
      DO II = 1, numClustersThisNode
         I = myClusters(II)
@@ -1005,7 +1006,7 @@ program cluster
   ENDIF
 
   ALLOCATE( mpiNodes( 3, numProcs ) )
-  call MPI_TYPE_CONTIGUOUS( 3, MPI_REAL, nodeType, ierr )
+  call MPI_TYPE_CONTIGUOUS( 3, MPI_FLOAT, nodeType, ierr )
   call MPI_TYPE_COMMIT( nodeType, ierr )
   ALLOCATE(NODESK1(2,numPoints))
   ALLOCATE(NODESK2(2,numPoints))
@@ -1052,14 +1053,14 @@ program cluster
            WRITE(*,*) 'Something has gone wrong a. Print all queues'
            WRITE(*,*) 'K1 = ', K1, ', K2 = ', K2
            WRITE(*,*) 'LIVE(K1) = ',LIVE(K1), ', K2 = ', LIVE(K2)
-           DO I = 1,numClustersThisNode
-              IF (.not. LIVE(I)) CYCLE
-              WRITE(*,*) 'Printing queue ', I
-              DO WHILE( PQueue(I)%SIZE() .ne. 0)
-                 call PQueue(I).POP( NODE )
-                 WRITE(*,*), NODE
-              ENDDO
-           ENDDO
+           ! DO I = 1,numClustersThisNode
+           !    IF (.not. LIVE(I)) CYCLE
+           !    WRITE(*,*) 'Printing queue ', I
+           !    DO WHILE( PQueue(I)%SIZE() .ne. 0)
+           !       call PQueue(I).POP( NODE )
+           !       WRITE(*,*), NODE
+           !    ENDDO
+           ! ENDDO
            call MPI_Abort(MPI_COMM_WORLD, 1, IERR)
         ENDIF
      ENDIF
@@ -1067,13 +1068,16 @@ program cluster
      mpiNode = (/ real(K1,4), real(RMIN,4), real(K2,4) /)
      ! WRITE(*,*) ' Rank', myRank, ' sending ', mpiNode
 
-     call MPI_ALLGATHER( mpiNode, 3, MPI_REAL, mpiNodes, 1, nodeType, &
+     call MPI_ALLGATHER( mpiNode, 1, nodeType, mpiNodes, 1, nodeType, &
           MPI_COMM_WORLD, ierr )
-
+     IF (ierr .ne. MPI_SUCCESS) THEN
+        WRITE(*,*) ' MPI_ALLGATHER returned error code ', ierr
+     ENDIF
+     
      K1 = -1
      rmin = 9.999d9
      DO I = 1,numProcs
-117     FORMAT('R = ', f7.4, ', K1 = ', I1)
+117     FORMAT('R = ', f7.4, ', K1 = ', I4)
         ! WRITE(*,117) mpiNodes(2,I), INT(mpiNodes(1,I))
         IF ( mpiNodes(2,I) .le. rmin ) THEN
            K1   = mpiNodes(1,I)
@@ -1097,14 +1101,14 @@ program cluster
         WRITE(*,*) 'Something has gone wrong b. Print all queues'
         WRITE(*,*) 'K1 = ', K1, ', K2 = ', K2
         WRITE(*,*) 'LIVE(K1) = ',LIVE(K1), ', K2 = ', LIVE(K2)
-        DO I = 1,numClustersThisNode
-           IF (.not. LIVE(I)) CYCLE
-           WRITE(*,*) 'Printing queue ', I
-           DO WHILE( PQueue(I)%SIZE() .ne. 0)
-              call PQueue(I).POP( NODE )
-              WRITE(*,*), NODE
-           ENDDO
-        ENDDO
+        ! DO I = 1,numClustersThisNode
+        !    IF (.not. LIVE(I)) CYCLE
+        !    WRITE(*,*) 'Printing queue ', I
+        !    DO WHILE( PQueue(I)%SIZE() .ne. 0)
+        !       call PQueue(I).POP( NODE )
+        !       WRITE(*,*), NODE
+        !    ENDDO
+        ! ENDDO
         call MPI_Abort(MPI_COMM_WORLD, 1, IERR)
      ENDIF
      NODE1(1) = RMIN
