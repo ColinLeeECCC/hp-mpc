@@ -168,50 +168,70 @@ program cluster
      I = I + 1
   ENDDO
   
+  if (myRank == ROOT) then
 
-  WRITE(*,*) '  Reading arguments from file ''', trim(arglist), ''''
-  ! Read in argument list from arglist.lst file
-  fu_in = 15
-  open(unit=fu_in, file=trim(arglist), status='old', iostat=ierr)
-  IF (ierr .ne. 0) THEN
-     WRITE(6,*) ' Couldn''t open "', trim(arglist), '"'
-     call MPI_Abort(MPI_COMM_WORLD, 2, IERR)
-  ENDIF
-
-  if ( .not. is_aircraft_data ) then
-     READ(fu_in, '(a256)') inDir ! data where compressed netcdf GEM-MACH data is stored
-     READ(fu_in, '(i4,2(1x,i2.2))') start_year, start_mon, start_day
-     READ(fu_in, '(i4,2(1x,i2.2))')   end_year,   end_mon,   end_day
-     READ(fu_in, *) linkage
-     READ(fu_in, *) useFractionOfRegion
-     READ(fu_in, '(a8)') gemMachFieldName
-     READ(fu_in, '(a8)') fieldName
-  else
-     READ(fu_in, '(a256)') acFileName ! data where compressed netcdf GEM-MACH data is stored
-     READ(fu_in, *) linkage
-     READ(fu_in, *) useFractionOfRegion
-     READ(fu_in, '(a256)') ncFieldName
-  end if
-  READ(fu_in, '(a256)', iostat = ierr) outDir
-
-  if (ierr .eq. 0) THEN
-     READ(fu_in, '(l1)', iostat = ierr) tmpLogical
-     if ( ierr .eq. 0 ) THEN
-        only_save_dissMat = tmpLogical
+     WRITE(*,*) '  Reading arguments from file ''', trim(arglist), ''''
+     ! Read in argument list from arglist.lst file
+     fu_in = 15
+     open(unit=fu_in, file=trim(arglist), status='old', iostat=ierr)
+     IF (ierr .ne. 0) THEN
+        WRITE(6,*) ' Couldn''t open "', trim(arglist), '"'
+        call MPI_Abort(MPI_COMM_WORLD, 2, IERR)
      ENDIF
+
+     if ( .not. is_aircraft_data ) then
+        READ(fu_in, '(a256)') inDir ! data where compressed netcdf GEM-MACH data is stored
+        READ(fu_in, '(i4,2(1x,i2.2))') start_year, start_mon, start_day
+        READ(fu_in, '(i4,2(1x,i2.2))')   end_year,   end_mon,   end_day
+        READ(fu_in, *) linkage
+        READ(fu_in, *) useFractionOfRegion
+        READ(fu_in, '(a8)') gemMachFieldName
+        READ(fu_in, '(a8)') fieldName
+     else
+        READ(fu_in, '(a256)') acFileName ! data where compressed netcdf GEM-MACH data is stored
+        READ(fu_in, *) linkage
+        READ(fu_in, *) useFractionOfRegion
+        READ(fu_in, '(a256)') ncFieldName
+     end if
+     READ(fu_in, '(a256)', iostat = ierr) outDir
+
+     if (ierr .eq. 0) THEN
+        READ(fu_in, '(l1)', iostat = ierr) tmpLogical
+        if ( ierr .eq. 0 ) THEN
+           only_save_dissMat = tmpLogical
+        ENDIF
+     endif
+
+     close(fu_in)
+     if (linkage .lt. 0 .or. linkage .gt. 6) THEN
+        WRITE(*,*) 'Linkage must be between 0 and 6, inclusive, not ', linkage
+        call MPI_Abort(MPI_COMM_WORLD, 7, IERR)
+     endif
+
+     
+     ! make sure outDir ends in a '/'
+     strLen = len_trim(outDir)
+     IF (outDir(strLen:strLen) .ne. '/') THEN
+        outDir = trim(outDir) // '/'
+     ENDIF
+     
   endif
 
-  close(fu_in)
-  if (linkage .lt. 0 .or. linkage .gt. 6) THEN
-     WRITE(*,*) 'Linkage must be between 0 and 6, inclusive, not ', linkage
-     call MPI_Abort(MPI_COMM_WORLD, 7, IERR)
-  endif
-
-  ! make sure outDir ends in a '/'
-  strLen = len_trim(outDir)
-  IF (outDir(strLen:strLen) .ne. '/') THEN
-     outDir = trim(outDir) // '/'
-  ENDIF
+  call MPI_BCast(inDir, len(inDir), MPI_CHARACTER, ROOT, MPI_COMM_WORLD, ierr)
+  call MPI_BCast(start_year, 1, MPI_INTEGER, ROOT, MPI_COMM_WORLD, ierr)
+  call MPI_BCast(start_mon,  1, MPI_INTEGER, ROOT, MPI_COMM_WORLD, ierr)
+  call MPI_BCast(start_day,  1, MPI_INTEGER, ROOT, MPI_COMM_WORLD, ierr)
+  call MPI_BCast(end_year,   1, MPI_INTEGER, ROOT, MPI_COMM_WORLD, ierr)
+  call MPI_BCast(end_mon,    1, MPI_INTEGER, ROOT, MPI_COMM_WORLD, ierr)
+  call MPI_BCast(end_day,    1, MPI_INTEGER, ROOT, MPI_COMM_WORLD, ierr)
+  call MPI_BCast(linkage,    1, MPI_INTEGER, ROOT, MPI_COMM_WORLD, ierr)
+  call MPI_BCast(useFractionOfRegion, 1, MPI_INTEGER, ROOT, MPI_COMM_WORLD, ierr)
+  call MPI_BCast(gemMachFieldName, len(gemMachFieldName), &
+       MPI_CHARACTER, ROOT, MPI_COMM_WORLD, ierr)
+  call MPI_BCast(fieldName,        len(fieldName),        &
+       MPI_CHARACTER, ROOT, MPI_COMM_WORLD, ierr)
+  call MPI_BCast(outdir, len(outdir), MPI_CHARACTER, ROOT, MPI_COMM_WORLD, ierr)
+  call MPI_BCast(only_save_dissMat, 1, MPI_LOGICAL, ROOT, MPI_COMM_WORLD, ierr)
 
   if (.not. is_aircraft_data) then
      strLen = len_trim(inDir)
@@ -223,7 +243,7 @@ program cluster
      WRITE(*,*) ' Reading compressed netcdf data from ', trim(inDir)
      WRITE(*,101) start_year, start_mon, start_day, end_year, end_mon, end_day
 101  FORMAT(' Doing ', i4, '-', i2, '-', i2, ' to ', i4, '-', i2, '-', i2)
-     WRITE(*,102) useFractionOfRegion
+     WRITE(*,102) useFractionOfRegion, useFractionOfRegion
 102  FORMAT(' Using only ', i3, 'x', i3, ' cells of available GEM-MACH domain')
      WRITE(*,*) ' Using field ', fieldName, '(', gemMachFieldName, ')'
      WRITE(*,*) ' Ouputting to ', trim(outDir)
@@ -668,6 +688,7 @@ program cluster
         !$OMP DEFAULT( SHARED )         &
         !$OMP PRIVATE( N, I, SXX, SYY ) &
         !$OMP PRIVATE( SXY, R, II )     &
+        !$OMP PRIVATE( JJ, J )          &
         !$OMP REDUCTION(MAX: RMAX)      &
         !$OMP REDUCTION(MIN: RMIN)
         DO II = 1,dissSizeI
@@ -712,6 +733,8 @@ program cluster
 
         ENDDO
         !$OMP END PARALLEL DO
+
+        WRITE(*,*) 'R ranged from ', 1d0 - RMAX, ' to ', 1d0 - RMIN
 
         ! Now we save out the tile of the dissimilarity matrix we computed.
         call get_dissMat_filename(dataFileName, outDir, is_aircraft_data,  &
@@ -951,8 +974,8 @@ program cluster
      endTimer = MPI_Wtime()
      WRITE(*,*) 'Loading dissimilarity matrix took ', endTimer - startTimer, ' seconds'
      
-     RMIN = 1d0 - RMIN
-     RMAX = 1d0 - RMAX
+     RMIN = 1d0 - RMAX
+     RMAX = 1d0 - RMIN
   ENDIF
 
   WRITE(*,*) 'R ranged from ', RMIN, ' to ', RMAX
