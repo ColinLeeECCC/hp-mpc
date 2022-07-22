@@ -90,8 +90,8 @@ program cluster
   real*8                     :: R, RMIN, RMAX, RTMP, Nt
 
   integer*8                  :: countStart, countEnd, countRate, countMax
-  integer                    :: uid
-  logical                    :: saveDissMatrix, loadDissMatrix
+  integer                    :: uid, startStep
+  logical                    :: saveDissMatrix, loadDissMatrix, fileExists
 
   ! mpi variables
   integer, parameter         :: ROOT = 0
@@ -374,9 +374,9 @@ program cluster
   loadDissMatrix = .true.
   uid = 15
   WRITE(*,*) ' Checking if ', trim(dataFileName), ' exists...'
-  inquire(file=dataFileName, exist=saveDissMatrix)
+  inquire(file=dataFileName, exist=fileExists)
   startTimer = MPI_Wtime()
-  saveDissMatrix = .not. saveDissMatrix
+  saveDissMatrix = .not. fileExists
 
   IF ( saveDissMatrix ) THEN
      WRITE(*,*) ' No. Computing dissimilarity matrix'
@@ -1045,8 +1045,36 @@ program cluster
   ! in advance
   call init_linkage(linkage)
 
+  startStep = 1
+  ! See if we are loading from a checkpoint file
+  dataFileName = trim(outDir) // '/checkpoint.bin'
+  inquire(file=dataFileName, exist=fileExists)
+  if (fileExists) then
+     call load_cluster_checkpoint(numPoints, numClustersThisNode, myRank, &
+                                  numProcs, myClusters, clusterRanks,     &
+                                  clusterDissimilarities, clusterPairs,   &
+                                  live, PQueue, startStep, NODES, outdir)
+
+    
+     DO II = 1, numClustersThisNode
+        I = myClusters(II)
+        call pQueue(II) % clear()
+        
+        IF ( .not. LIVE(I) ) cycle
+        
+        DO J = 1, numPoints
+           IF (I .eq. J) CYCLE
+           IF (.not. LIVE(J)) cycle
+
+           NODES(II,J,2) = real(J,8)
+           CALL PQueue(II)%INSERT( NODES(II,J,:), heapIdx(II,J) )
+        ENDDO
+
+     ENDDO
+  endif
+
   ! Need to iterate this many times to get to a single cluster
-  DO K = 1, numPoints-1
+  DO K = startStep, numPoints-1
 
      ! find the queue with the min value
      RMIN = 9.999d9
@@ -1181,11 +1209,6 @@ program cluster
         !$OMP END PARALLEL DO
         ! WRITE(*,*) ' Rank ', myRank, ' done filling NODESK1'
      ENDIF
-     ! WRITE(*,*), ' Rank', myRank, ' getting ready to bcast k1rank =', K1Rank
-     call MPI_BCast( NODESK1, numPoints, MPI_2DOUBLE_PRECISION, &
-          K1Rank, MPI_COMM_WORLD, IERR)
-     ! WRITE(*,*), ' Rank', myRank, ' back from bcast. IERR = ', &
-     !      IERR, ' NK1(1,:) = ', NODESK1(1,:), 'NK2(2,:) = ', NODESK1(2,:)
 
      IF ( K2ThisRank ) THEN
         ! WRITE(*,*) ' Rank ', myRank, ' filling NODESK2 to bcast'
@@ -1198,7 +1221,14 @@ program cluster
         !$OMP END PARALLEL DO
         ! WRITE(*,*) ' Rank ', myRank, ' done filling NODESK2'
      ENDIF
+
+     ! WRITE(*,*), ' Rank', myRank, ' getting ready to bcast k1rank =', K1Rank
+     call MPI_BCast( NODESK1, numPoints, MPI_2DOUBLE_PRECISION, &
+          K1Rank, MPI_COMM_WORLD, IERR)
+     ! WRITE(*,*), ' Rank', myRank, ' back from bcast. IERR = ', &
+     !      IERR, ' NK1(1,:) = ', NODESK1(1,:), 'NK2(2,:) = ', NODESK1(2,:)
      ! WRITE(*,*), ' Rank', myRank, ' getting ready to bcast k2rank =', K2Rank
+
      call MPI_BCast( NODESK2, numPoints, MPI_2DOUBLE_PRECISION, &
           K2Rank, MPI_COMM_WORLD, IERR)
      ! WRITE(*,*), ' Rank', myRank, ' back from bcast. IERR = ', &
@@ -1311,6 +1341,7 @@ program cluster
               !$OMP END CRITICAL
            ENDIF
         ENDIF
+        
      ENDDO
      !$OMP END PARALLEL DO
 
@@ -1338,6 +1369,19 @@ program cluster
 
      clusterSize(K1) = clusterSize(K1) + clusterSize(K2)
      clusterSize(K2) = 0
+     
+     if ( MOD(K, 100000) .eq. 0 ) THEN
+        ! Increment the step because we're *done* this step
+        !!! TODO:
+        !!!      Need to save more information in the checkpoint so
+        !!!      the correct file is loaded for a given run if there
+        !!!      are multiple, different runs in the same output dir
+        call save_cluster_checkpoint(numPoints, numClustersThisNode, myRank, &
+                                     numProcs, myClusters, clusterRanks,     &
+                                     clusterDissimilarities, clusterPairs,   &
+                                     live, PQueue, K+1, NODES, outdir)
+     endif
+
   ENDDO
   endTimer = MPI_Wtime()
   WRITE(*,*) 'Clustering took ', endTimer - startTimer,' sec'
@@ -1367,6 +1411,427 @@ program cluster
   call MPI_FINALIZE(IERR)
 
 CONTAINS
+  subroutine save_cluster_checkpoint(numPoints, numClustersThisNode, myRank,   &
+                                     numProcs, myClusters, clusterRanks,        &
+                                     clusterDissimilarities, clusterPairs,     &
+                                     live, PQueues, step, NODES, outputDir)
+
+    integer, intent(IN)       :: numPoints, numClustersThisNode, myRank, numProcs
+    integer, intent(IN)       :: myClusters(numClustersThisNode)
+    integer, intent(IN)       :: clusterRanks(numPoints)
+    real*4,  intent(IN)       :: clusterDissimilarities(numPoints - 1)
+    integer, intent(IN)       :: clusterPairs(numPoints - 1, 2)
+    logical, intent(IN)       :: live(numPoints)
+    TYPE(THEAP), intent(IN)   :: PQueues(numClustersThisNode)
+    integer, intent(IN)       :: step
+    real*8,  intent(IN)       :: nodes(numClustersThisNode, numPoints, 2)
+    character(len=*), intent(IN):: outputDir
+
+    integer                   :: ii, i, J, K
+    integer                   :: liveClusters, liveClustersThisNode
+    real*8, allocatable, dimension(:)                                      &
+                              :: nullRow
+    real*8                    :: node(3)
+    integer                   :: idxLive(numPoints)
+    integer                   :: status(MPI_STATUS_SIZE), writeCount
+    integer                   :: nodeType, dissMatRowType, dissMatBlockType
+    integer(KIND=MPI_OFFSET_KIND):: disp, dispi
+    integer                   :: mpi_uid
+    character(LEN=256)        :: checkpointFilename, fmt
+
+    ! Save out the dissimilarity matrix and all the other information
+    ! required to restart clustering in the middle
+
+    !! Debug info
+210 format(' numPoints = ', i0, ' numClustersThisNode = ', i0, ' myRank = ', i0, ' numProcs = ', i0)
+    write(*,*) '# # # Saving checkpoint at step ', step
+    write(*,210) numPoints, numClustersThisNode, myRank, numProcs
+    ! write(*,'(\"NODES(2,1,:) = \", 2(g12.4))') NODES(2,1,:)
+211 format('( " LIVE = ", ', i0, '( L1, ", ") )')
+    ! write(fmt, 211) numPoints
+    ! write(*, fmt) live
+
+
+    liveClusters = 0
+    liveClustersThisNode = 0
+    K = 1
+    ! Count the number of live clusters
+    DO I = 1, numPoints
+       IF (LIVE(I)) THEN
+          liveClusters = liveClusters + 1
+          IF (clusterRanks(I) == myRank) THEN
+             liveClustersThisNode = liveClustersThisNode + 1
+          END IF
+          idxLive(I) = K
+          K = K + 1
+       END IF
+    END DO
+
+! 212 format('( " NODES( ", i0, ",LIVE,", i0, " ) = ", ', i0, '( g12.4, ", ") )')
+!     write(fmt, 212) liveClusters
+!     DO II = 1, numClustersThisNode
+!        I = myClusters(II)
+!        if (LIVE(I)) &
+!             write(*, fmt) I,1, pack(NODES(II, :, 1), live)
+!     ENDDO
+! 213 format('( " NODES( ", i0, ",LIVE,", i0, " ) = ", ', i0, '( i0, ", ") )')
+!     write(fmt, 212) liveClusters
+!     DO II = 1, numClustersThisNode
+!        I = myClusters(II)
+!        if (LIVE(I)) &
+!             write(*, fmt) I,2, INT(pack(NODES(II, :, 2), live))
+!     ENDDO
+
+
+    ! the LIVE array is the same in every task and the number of .TRUE.
+    ! values in that array should be the length of the MPI_Type_cotiguous.
+    ! We will also need to set the file view by creating a block. Basically,
+    ! we need to redo the saveDissMat block but replacing numPoints with
+    ! the number of .TRUE. values in live.
+199 format('checkpoint-', i9.9, '.bin')
+    write(checkpointFileName, 199), step
+    checkpointFileName = trim(outputDir) // checkpointFileName
+    
+    call MPI_FILE_OPEN(MPI_COMM_WORLD, checkpointFilename, MPI_MODE_CREATE + MPI_MODE_WRONLY, MPI_INFO_NULL, mpi_uid, ierr)
+    IF (IERR .ne. MPI_SUCCESS) THEN
+       WRITE(*,*) ' ERROR: ', IERR, ' Opening file ', trim(checkpointFileName)
+       call MPI_Abort(MPI_COMM_WORLD, 4, IERR)
+    ENDIF
+
+    disp = 0_MPI_OFFSET_KIND
+    ! Have the root node add the remaining data
+    if (myRank .eq. 0) then
+
+       ! this might not be necessary since it should be in the filename, but maybe for redundancy
+       call MPI_File_Write(mpi_uid, step, 1, MPI_INTEGER, status, ierr)
+       IF (ierr .ne. MPI_SUCCESS) THEN
+          WRITE(*,*) 'MPI_File_write retured ierr = ', ierr
+          call MPI_Abort(MPI_COMM_WORLD, 8, ierr)
+       ENDIF
+       call MPI_Get_count(status, MPI_INTEGER, writeCount, ierr)
+       IF ( writeCount .ne. 1 ) THEN
+          WRITE(*,*) 'MPI_File_write wrote ', readCount, ' not ', 1 , &
+               ' for step'
+          call MPI_Abort(MPI_COMM_WORLD, 9, ierr)
+       ENDIF
+
+       call MPI_File_Write(mpi_uid, live, numPoints, MPI_LOGICAL, status, ierr)
+       IF (ierr .ne. MPI_SUCCESS) THEN
+          WRITE(*,*) 'MPI_File_write retured ierr = ', ierr
+          call MPI_Abort(MPI_COMM_WORLD, 10, ierr)
+       ENDIF
+       call MPI_Get_count(status, MPI_LOGICAL, writeCount, ierr)
+       IF ( writeCount .ne. numPoints ) THEN
+          WRITE(*,*) 'MPI_File_write wrote ', readCount, ' not ', numPoints, &
+               ' for LIVE'
+          call MPI_Abort(MPI_COMM_WORLD, 11, ierr)
+       ENDIF
+       
+       call MPI_File_Write(mpi_uid, pack(clusterPairs, .TRUE.), (numPoints - 1) * 2, MPI_INTEGER, status, ierr)
+       IF (ierr .ne. MPI_SUCCESS) THEN
+          WRITE(*,*) 'MPI_File_write retured ierr = ', ierr
+          call MPI_Abort(MPI_COMM_WORLD, 12, ierr)
+       ENDIF
+       call MPI_Get_count(status, MPI_INTEGER, writeCount, ierr)
+       IF ( writeCount .ne. (numPoints - 1) * 2 ) THEN
+          WRITE(*,*) 'MPI_File_write wrote ', readCount, ' not ', (numPoints - 1)*2, &
+               ' for clusterPairs'
+          call MPI_Abort(MPI_COMM_WORLD, 13, ierr)
+       ENDIF
+       
+       call MPI_File_Write(mpi_uid, pack(clusterDissimilarities, .TRUE.), (numPoints - 1), &
+            MPI_REAL, status, ierr)
+       IF (ierr .ne. MPI_SUCCESS) THEN
+          WRITE(*,*) 'MPI_File_write retured ierr = ', ierr
+          call MPI_Abort(MPI_COMM_WORLD, 14, ierr)
+       ENDIF
+       call MPI_Get_count(status, MPI_REAL, writeCount, ierr)
+       IF ( writeCount .ne. (numPoints - 1) ) THEN
+          WRITE(*,*) 'MPI_File_write wrote ', readCount, ' not ', (numPoints - 1), &
+               ' for clusterDissimilarities'
+          call MPI_Abort(MPI_COMM_WORLD, 15, ierr)
+       ENDIF
+
+       call MPI_File_Get_Position( mpi_uid, disp, ierr)
+       IF (ierr .ne. MPI_SUCCESS) THEN
+          WRITE(*,*) 'MPI_File_write retured ierr = ', ierr
+          call MPI_Abort(MPI_COMM_WORLD, 16, ierr)
+       ENDIF
+       II = INT(DISP, kind=4)
+       write(*,*) ' MPI file offset = ', II
+
+    endif
+
+    call MPI_BCast( II, 1, MPI_INTEGER, ROOT, MPI_COMM_WORLD, ierr)
+    disp = INT(II, kind=MPI_OFFSET_KIND)
+
+    WRITE(*,*) 'Creating block type'
+    call MPI_Type_vector(numClustersThisNode, liveClusters, liveClusters*numProcs, &
+         MPI_DOUBLE_PRECISION, dissMatBlockType, ierr)
+    call MPI_Type_commit(dissMatBlockType, ierr)
+
+    dispi = disp + INT(myRank, kind=MPI_OFFSET_KIND) * &
+               INT(liveClusters, kind=MPI_OFFSET_KIND) *&
+               8_MPI_OFFSET_KIND
+    
+    WRITE(*,*) 'Setting view to start at ', dispi
+    call MPI_FILE_SET_VIEW(mpi_uid, dispi, MPI_DOUBLE_PRECISION, &
+         dissMatBlockType, 'native', MPI_INFO_NULL, ierr)
+
+    WRITE(*,*) 'Creating row type'
+    ! Now we need a data type for the individual row
+    call MPI_Type_contiguous( liveClusters, MPI_DOUBLE_PRECISION, dissMatRowType, ierr )
+    call MPI_Type_commit( dissMatRowType, ierr )            
+
+    allocate(nullRow(liveClusters))
+    nullRow(:) = 0d0
+
+    DO II = 1,numClustersThisNode
+       I = myClusters(II)
+       if (.not. live(I)) then
+          ! Since the rows are no longer evenly distributed amongst the
+          ! tasks, we need to fill in the blank rows when we're dealing
+          ! with a non-live cluster row
+          call MPI_File_Write(mpi_uid, nullRow, 1, dissMatRowType, status, ierr)
+          IF (ierr .ne. MPI_SUCCESS) THEN
+             WRITE(*,*) 'MPI_File_write retured ierr = ', ierr
+             call MPI_Abort(MPI_COMM_WORLD, 5, ierr)
+          ENDIF
+          call MPI_Get_count(status, MPI_DOUBLE_PRECISION, writeCount, ierr)
+          IF ( writeCount .ne. liveClusters ) THEN
+             WRITE(*,*) 'MPI_File_write wrote ', readCount, ' not ', liveClusters, &
+                  ' at step ', II, ' of ', dissSizeI
+             call MPI_Abort(MPI_COMM_WORLD, 6, ierr)
+          ENDIF
+       else
+          call MPI_File_Write(mpi_uid, pack(NODES(II, :, 1), live), 1, dissMatRowType, status, ierr)
+          IF (ierr .ne. MPI_SUCCESS) THEN
+             WRITE(*,*) 'MPI_File_write retured ierr = ', ierr
+             call MPI_Abort(MPI_COMM_WORLD, 5, ierr)
+          ENDIF
+          call MPI_Get_count(status, MPI_DOUBLE_PRECISION, writeCount, ierr)
+          IF ( writeCount .ne. liveClusters ) THEN
+             WRITE(*,*) 'MPI_File_write wrote ', readCount, ' not ', liveClusters, &
+                  ' at step ', II, ' of ', dissSizeI
+             call MPI_Abort(MPI_COMM_WORLD, 6, ierr)
+          ENDIF
+       endif
+    ENDDO
+
+    deallocate(nullRow)
+
+    call MPI_File_Close( mpi_uid, ierr )
+    
+  end subroutine save_cluster_checkpoint
+    
+  subroutine load_cluster_checkpoint(numPoints, numClustersThisNode, myRank,   &
+                                     numProcs, myClusters, clusterRanks,        &
+                                     clusterDissimilarities, clusterPairs,     &
+                                     live, PQueues, step, NODES, outputDir)
+
+    integer, intent(IN)       :: numPoints, numClustersThisNode, myRank, numProcs
+    integer, intent(IN)       :: myClusters(numClustersThisNode)
+    integer, intent(IN)       :: clusterRanks(numPoints)
+    real*4,  intent(INOUT)    :: clusterDissimilarities(numPoints - 1)
+    integer, intent(INOUT)    :: clusterPairs(numPoints - 1, 2)
+    logical, intent(INOUT)    :: live(numPoints)
+    TYPE(THEAP), intent(INOUT):: PQueues(numClustersThisNode)
+    integer, intent(OUT)      :: step
+    real*8,  intent(INOUT)    :: nodes(numClustersThisNode, numPoints, 2)
+    character(len=*), intent(IN):: outputDir
+
+
+    integer                   :: ii, i, J, K
+    integer                   :: liveClusters, liveClustersThisNode
+    real*8                    :: node(3)
+    integer                   :: idxLive(numPoints)
+    integer                   :: status(MPI_STATUS_SIZE), writeCount
+    integer                   :: nodeType, dissMatRowType, dissMatBlockType
+    integer(KIND=MPI_OFFSET_KIND):: disp
+    integer                   :: mpi_uid
+    character(LEN=256)        :: checkpointFilename, fmt
+    real*8, allocatable, dimension(:)  :: dissMatRow
+    integer, allocatable, dimension(:) :: clusterPairsFlat
+
+    ! Save out the dissimilarity matrix and all the other information
+    ! required to restart clustering in the middle
+
+    !! Debug info
+210 format(' numPoints = ', i0, ' numClustersThisNode = ', i0, ' myRank = ', i0, ' numProcs = ', i0)
+    write(*,*) '# # # Restoring checkpoint'
+    write(*,210) numPoints, numClustersThisNode, myRank, numProcs
+    ! write(*,'(\"NODES(2,1,:) = \", 2(g12.4))') NODES(2,1,:)
+211 format('( " LIVE = ", ', i0, '( L1, ", ") )')
+    write(fmt, 211) numPoints
+    ! write(*, fmt) live
+    
+    checkpointFileName = trim(outputDir) // 'checkpoint.bin'
+
+    call MPI_FILE_OPEN(MPI_COMM_WORLD, trim(checkpointFileName), MPI_MODE_RDONLY, MPI_INFO_NULL, mpi_uid, ierr)
+    IF (IERR .ne. MPI_SUCCESS) THEN
+       WRITE(*,*) ' ERROR: Opening file ', trim(checkpointFileName)
+       call MPI_Abort(MPI_COMM_WORLD, 4, IERR)
+    ENDIF
+
+    ! Read in the clustering data, like what step we're on and which nodes
+    ! are still live and which ones have been clustered already
+    call MPI_File_Read(mpi_uid, step, 1, MPI_INTEGER, status, ierr)
+    IF (ierr .ne. MPI_SUCCESS) THEN
+       WRITE(*,*) 'MPI_File_read retured ierr = ', ierr
+       call MPI_Abort(MPI_COMM_WORLD, 8, ierr)
+    ENDIF
+    call MPI_Get_count(status, MPI_INTEGER, writeCount, ierr)
+    IF ( writeCount .ne. 1 ) THEN
+       WRITE(*,*) 'MPI_File_read wrote ', readCount, ' not ', 1 , &
+            ' for step'
+       call MPI_Abort(MPI_COMM_WORLD, 9, ierr)
+    ENDIF
+
+    write(*,*) ' step = ', step
+
+    call MPI_File_Read(mpi_uid, live, numPoints, MPI_LOGICAL, status, ierr)
+    IF (ierr .ne. MPI_SUCCESS) THEN
+       WRITE(*,*) 'MPI_File_read retured ierr = ', ierr
+       call MPI_Abort(MPI_COMM_WORLD, 10, ierr)
+    ENDIF
+    call MPI_Get_count(status, MPI_LOGICAL, writeCount, ierr)
+    IF ( writeCount .ne. numPoints ) THEN
+       WRITE(*,*) 'MPI_File_read wrote ', readCount, ' not ', numPoints, &
+            ' for LIVE'
+       call MPI_Abort(MPI_COMM_WORLD, 11, ierr)
+    ENDIF
+
+    ! write(*, fmt) live
+    
+    if (myRank .eq. ROOT) then
+       allocate(clusterPairsFlat((numPoints - 1)*2))
+
+       call MPI_File_Read(mpi_uid, clusterPairsFlat, (numPoints - 1) * 2, MPI_INTEGER, status, ierr)
+       IF (ierr .ne. MPI_SUCCESS) THEN
+          WRITE(*,*) 'MPI_File_read retured ierr = ', ierr
+          call MPI_Abort(MPI_COMM_WORLD, 12, ierr)
+       ENDIF
+       call MPI_Get_count(status, MPI_INTEGER, writeCount, ierr)
+       IF ( writeCount .ne. (numPoints - 1) * 2 ) THEN
+          WRITE(*,*) 'MPI_File_read wrote ', readCount, ' not ', (numPoints - 1)*2, &
+               ' for clusterPairs'
+          call MPI_Abort(MPI_COMM_WORLD, 13, ierr)
+       ENDIF
+       clusterPairs = reshape(clusterPairsFlat, shape(clusterPairs))
+    else
+       ! If we're not the root task, we don't need this info
+       ! and haven't allocated space for it, so we need to seek
+       ! file forward the size of the array we're not reading
+       disp = INT((numPoints - 1) * 2 * 4, kind=MPI_OFFSET_KIND)
+       call MPI_File_Seek(mpi_uid, disp, MPI_SEEK_CUR, ierr)
+       IF (ierr .ne. MPI_SUCCESS) THEN
+          WRITE(*,*) 'MPI_File_seek retured ierr = ', ierr
+          call MPI_Abort(MPI_COMM_WORLD, 17, ierr)
+       ENDIF
+    endif
+
+    if (myRank .eq. ROOT) then
+       call MPI_File_Read(mpi_uid, clusterDissimilarities, (numPoints - 1), &
+            MPI_REAL, status, ierr)
+       IF (ierr .ne. MPI_SUCCESS) THEN
+          WRITE(*,*) 'MPI_File_read retured ierr = ', ierr
+          call MPI_Abort(MPI_COMM_WORLD, 14, ierr)
+       ENDIF
+       call MPI_Get_count(status, MPI_REAL, writeCount, ierr)
+       IF ( writeCount .ne. (numPoints - 1) ) THEN
+          WRITE(*,*) 'MPI_File_read wrote ', readCount, ' not ', (numPoints - 1), &
+               ' for clusterDissimilarities'
+          call MPI_Abort(MPI_COMM_WORLD, 15, ierr)
+       ENDIF
+    else
+       ! If we're not the root task, we don't need this info
+       ! and haven't allocated space for it, so we need to seek
+       ! file forward the size of the array we're not reading
+       disp = INT((numPoints - 1) * 4, kind=MPI_OFFSET_KIND)
+       call MPI_File_Seek(mpi_uid, disp, MPI_SEEK_CUR, ierr)
+       IF (ierr .ne. MPI_SUCCESS) THEN
+          WRITE(*,*) 'MPI_File_seek retured ierr = ', ierr
+          call MPI_Abort(MPI_COMM_WORLD, 17, ierr)
+       ENDIF
+    endif
+
+    liveClusters = 0
+    liveClustersThisNode = 0
+    K = 1
+    ! Count the number of live clusters
+    DO I = 1, numPoints
+       IF (LIVE(I)) THEN
+          liveClusters = liveClusters + 1
+          IF (clusterRanks(I) == myRank) THEN
+             liveClustersThisNode = liveClustersThisNode + 1
+          END IF
+          idxLive(I) = K
+          K = K + 1
+       END IF
+    END DO
+
+212 format('( " NODES( ", i0, ",LIVE,1) = ", ', i0, '( g12.4, ", ") )')
+    ! write(fmt, 212) liveClusters
+    DO II = 1, numClustersThisNode
+       I = myClusters(II)
+       if (LIVE(I)) &
+            write(*, fmt) I, pack(NODES(II, :, 1), live)
+    ENDDO
+
+    call MPI_File_Get_Position( mpi_uid, disp, ierr)
+    IF (ierr .ne. MPI_SUCCESS) THEN
+       WRITE(*,*) 'MPI_File_write retured ierr = ', ierr
+       call MPI_Abort(MPI_COMM_WORLD, 16, ierr)
+    ENDIF
+    ! write(*,*) ' MPI file offset = ', disp
+
+    allocate(dissMatRow(liveClusters))
+    
+    WRITE(*,*) 'Creating block type'
+    call MPI_Type_vector(numClustersThisNode, liveClusters, liveClusters*numProcs, &
+         MPI_DOUBLE_PRECISION, dissMatBlockType, ierr)
+    call MPI_Type_commit(dissMatBlockType, ierr)
+    ! Offset needs to include the data written before the dissimilarity matrix
+    disp = disp + INT(myRank, kind=MPI_OFFSET_KIND) * &
+         INT(liveClusters, kind=MPI_OFFSET_KIND) *&
+         8_MPI_OFFSET_KIND
+
+    WRITE(*,*) 'Setting view to start at ', disp
+    call MPI_FILE_SET_VIEW(mpi_uid, disp, MPI_DOUBLE_PRECISION, &
+         dissMatBlockType, 'native', MPI_INFO_NULL, ierr)
+
+    WRITE(*,*) 'Creating row type'
+    ! Now we need a data type for the individual row
+    call MPI_Type_contiguous( liveClusters, MPI_DOUBLE_PRECISION, dissMatRowType, ierr )
+    call MPI_Type_commit( dissMatRowType, ierr )            
+
+
+    DO II = 1,numClustersThisNode
+       I = myClusters(II)
+       call MPI_File_read(mpi_uid, dissMatRow, 1, dissMatRowType, status, ierr)
+       IF (ierr .ne. MPI_SUCCESS) THEN
+          WRITE(*,*) 'MPI_File_write retured ierr = ', ierr
+          call MPI_Abort(MPI_COMM_WORLD, 5, ierr)
+       ENDIF
+       call MPI_Get_count(status, MPI_DOUBLE_PRECISION, writeCount, ierr)
+       IF ( writeCount .ne. liveClusters ) THEN
+          WRITE(*,*) 'MPI_File_write wrote ', readCount, ' not ', dissSizeJ, &
+               ' at step ', II, ' of ', dissSizeI
+          call MPI_Abort(MPI_COMM_WORLD, 6, ierr)
+       ENDIF
+       if (live(I)) then
+          nodes(II,:,1) = unpack(dissMatRow, live, nodes(II,:,1))
+       endif
+    ENDDO
+
+    call MPI_File_Close( mpi_uid, ierr )
+
+    if (allocated(clusterPairsFlat)) deallocate(clusterPairsFlat)
+    if (allocated(dissMatRow))       deallocate(dissMatRow)
+    
+  end subroutine load_cluster_checkpoint
+
+    
   subroutine get_dissMat_filename(fileName, outDir, is_aircraft_data, &
        linkage, grid_ni, grid_nj, start_year, start_mon, start_day,   &
        end_year, end_mon, end_day, forecastHour)

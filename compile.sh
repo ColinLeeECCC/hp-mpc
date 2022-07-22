@@ -10,10 +10,11 @@ set -x
 . r.load.dot rpn/vgrid/20220216
 . r.load.dot rpn/ezinterpv/20220216
 
-s.compile -src mheap.f90 -openmp -mpi  -librmn -libappl netcdff netcdf hdf5_hl hdf5 z curl irc -O 1 # -debug -strict -prof -O 0
+# s.compile -src mheap.f90 -openmp -mpi  -librmn -libappl netcdff netcdf hdf5_hl hdf5 z curl irc -O 1 # -debug -strict -prof -O 0
+s.compile -src mheap.f90 -openmp -mpi  -librmn -libappl netcdff netcdf hdf5_hl hdf5 z curl irc -debug -strict -prof -O 0
 
-s.compile -src cluster_mpi.f90 -openmp -mpi -librmn -libappl netcdff netcdf hdf5_hl hdf5 z curl irc -O 1 
-# s.compile -src cluster_mpi.f90 -openmp -mpi -librmn -libappl netcdff netcdf hdf5_hl hdf5 z curl irc -debug -strict -prof -O 0
+#s.compile -src cluster_mpi.f90 -openmp -mpi -librmn -libappl netcdff netcdf hdf5_hl hdf5 z curl irc -O 1 
+s.compile -src cluster_mpi.f90 -openmp -mpi -librmn -libappl netcdff netcdf hdf5_hl hdf5 z curl irc -debug -strict -prof -O 0
 
-s.compile -obj cluster_mpi.o mheap.o -o cluster.abs -openmp -mpi  -librmn -libappl netcdff netcdf hdf5_hl hdf5 z curl irc -O 1 # -debug -strict -prof -O 0
-# s.compile -obj cluster_mpi.o mheap.o -o cluster.abs -openmp -mpi  -librmn -libappl netcdff netcdf hdf5_hl hdf5 z curl irc -debug -strict -prof -O 0
+# s.compile -obj cluster_mpi.o mheap.o -o cluster.abs -openmp -mpi  -librmn -libappl netcdff netcdf hdf5_hl hdf5 z curl irc -O 1 # -debug -strict -prof -O 0
+s.compile -obj cluster_mpi.o mheap.o -o cluster.abs -openmp -mpi  -librmn -libappl netcdff netcdf hdf5_hl hdf5 z curl irc -debug -strict -prof -O 0

@@ -11,13 +11,13 @@ PROGRAM	PRINTDISSMATRIX
   integer(kind=1)    :: tmpi(8)
   real(kind=8)       :: tmpr
   equivalence (tmpi, tmpr)
-  integer            :: i,j,l
+  integer*8          :: i, j,l
 
-  character(len=256) :: argStr, fileName
-  integer            :: nside, ftype, argLen, stat
-  integer            :: nPoints, uid, argCount
+  character(len=256) :: argStr, fileName, fmt
+  integer            :: ftype, argLen, stat
+  integer            :: uid, argCount
   logical            :: fileExist
-
+  integer*8          :: nPoints
 
   argCount = 1
   uid = 15
@@ -32,8 +32,8 @@ PROGRAM	PRINTDISSMATRIX
   ! first get the size of the side of the tile we used
   ! from the GEM-MACH background fields
   call get_command_argument( argCount, argStr, argLen, stat)
-  READ( argStr(1:argLen), '(i4)' ) nside
-  if (nside .le. 0 .or. stat .ne. 0) &
+  READ( argStr(1:argLen), '(i4)' ) npoints ! nside
+  if (npoints .le. 0 .or. stat .ne. 0) &
        call PRINT_USAGE()
 
   argCount = argCount + 1
@@ -47,7 +47,7 @@ PROGRAM	PRINTDISSMATRIX
        ftype .eq. 9 ) ) &
        call PRINT_USAGE()
 
-  NPOINTS = NSIDE * NSIDE
+  ! NPOINTS = NSIDE * NSIDE
   if ( ftype .eq. 9 ) then
      open(uid, file=trim(fileName), status='old', form='unformatted', &
           access='direct', recl=NPOINTS*8, convert='BIG_ENDIAN')
@@ -94,28 +94,40 @@ PROGRAM	PRINTDISSMATRIX
   
 101 FORMAT( 4( G11.4, 2x ), ' . . . ', 4( G11.4, 2x ) )
 103 FORMAT( a )
-  DO I = 1,4
-     IF ( ftype .eq. 4) THEN
-        WRITE(*,101) E(I, 1:4), E(I, nPoints-3:nPoints)
-     ELSE
-        WRITE(*,101) R(I, 1:4), R(I, nPoints-3:nPoints)
-     ENDIF
-  ENDDO
-  WRITE(*,'(a, 20x, a)') ' . . . ', '. . .'
-  DO I = nPoints-3,nPoints
-     IF ( ftype .eq. 4) THEN
-        WRITE(*,101) E(I, 1:4), E(I, nPoints-3:nPoints)
-     ELSE
-        WRITE(*,101) R(I, 1:4), R(I, nPoints-3:nPoints)
-     ENDIF
-  ENDDO
+    if (nPoints .GE. 8) then
+       DO I = 1,4
+          IF ( ftype .eq. 4) THEN
+             WRITE(*,101) E(I, 1:4), E(I, nPoints-3:nPoints)
+          ELSE
+             WRITE(*,101) R(I, 1:4), R(I, nPoints-3:nPoints)
+          ENDIF
+       ENDDO
+       WRITE(*,'(a, 20x, a)') ' . . . ', '. . .'
+       DO I = nPoints-3,nPoints
+          IF ( ftype .eq. 4) THEN
+             WRITE(*,101) E(I, 1:4), E(I, nPoints-3:nPoints)
+          ELSE
+             WRITE(*,101) R(I, 1:4), R(I, nPoints-3:nPoints)
+          ENDIF
+       ENDDO
+    else
+       write(fmt, "('(', i1, '( G11.4, 2x ) )')") nPoints
+       DO I = 1,nPoints
+          IF ( ftype .eq. 4) THEN
+             WRITE(*,fmt) E(I, :)
+          ELSE
+             WRITE(*,fmt) R(I, :)
+          ENDIF
+       ENDDO
+    endif
+
 
 CONTAINS
   SUBROUTINE PRINT_USAGE()
-    WRITE(*,*) ' printDissMatrix <matFileName> <nSide> <realType> '
+    WRITE(*,*) ' printDissMatrix <matFileName> <nPoints> <realType> '
     WRITE(*,*) '        matFileName: the name of the file with the matrix data'
-    WRITE(*,*) '        nSide:       the size of the tile from the GEM-MACH background fields'
-    WRITE(*,*) '        realType:    the size of real (real*8 or real*4) used'
+    WRITE(*,*) '        nPoints:     the number of points being clustered'
+    WRITE(*,*) '        realType:    the size of real (real*8 or real*4) used (use 9 for MPI files)'
     STOP 1
   END SUBROUTINE PRINT_USAGE
 END PROGRAM PRINTDISSMATRIX
