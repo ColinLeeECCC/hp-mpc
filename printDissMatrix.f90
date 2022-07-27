@@ -32,7 +32,7 @@ PROGRAM	PRINTDISSMATRIX
   ! first get the size of the side of the tile we used
   ! from the GEM-MACH background fields
   call get_command_argument( argCount, argStr, argLen, stat)
-  READ( argStr(1:argLen), '(i4)' ) npoints ! nside
+  READ( argStr(1:argLen), '(i)' ) npoints ! nside
   if (npoints .le. 0 .or. stat .ne. 0) &
        call PRINT_USAGE()
 

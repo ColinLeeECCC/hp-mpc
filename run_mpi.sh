@@ -2,8 +2,8 @@
 
 # set up batch system parameters for MPI threads and wall clock time (min)
 # this setup should be suitable for a useFract = 6 or up
-NODESX=16     # number of nodes
-NODESY=8    # MPI threads per node
+NODESX=80     # number of nodes
+NODESY=4    # MPI threads per node
 WTIME=180    # wall clock time in minutes
 # use this setup for using all the data useFract=1
 # NODESX=40   # number of nodes
@@ -16,8 +16,8 @@ WTIME=180    # wall clock time in minutes
 # OMP_NUM_THREADS because that should be set by the grid engine.
 # OMPTHREADS=$(( 80 / NODESY ))
 # MEM="$(( 100 / NODESY ))G"
-OMPTHREADS=10
-MEM=20G
+OMPTHREADS=20
+MEM=60G
 
 rm jobscript.sh
 cat <<EOD >jobscript.sh
@@ -39,4 +39,4 @@ r.run_in_parallel -npex ${NODESX} -npey ${NODESY} -inorder -pgm \${wrkDir}/clust
 EOD
 # on ppp3 -cpus 40x1 -cm 5G gives only one node; as a workaround use -cpus 44x44 -cm 210G
 
-ord_soumet jobscript.sh -mach ppp5 -cpus ${NODESX}x${NODESY}x${OMPTHREADS} -cm ${MEM} -waste 90 -w ${WTIME} -mpi -jn mpi_test -listing /space/hall5/sitestore/eccc/aq/r1/cle001/src/hierarchical-clustering/listings -args $@
+ord_soumet jobscript.sh -mach robert -cpus ${NODESX}x${NODESY}x${OMPTHREADS} -cm ${MEM} -waste 90 -w ${WTIME} -mpi -jn mpi_test -listing /space/hall5/sitestore/eccc/aq/r1/cle001/src/hierarchical-clustering/listings -args $@

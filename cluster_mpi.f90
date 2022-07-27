@@ -26,6 +26,7 @@ program cluster
   ! input parameters
   logical                    :: is_aircraft_data
   logical                    :: only_save_dissMat,tmpLogical
+  integer                    :: checkptFreq
   character(256)             :: inDir, outDir
   integer                    :: start_year, start_mon, start_day
   integer                    ::   end_year,   end_mon,   end_day
@@ -199,6 +200,10 @@ program cluster
         READ(fu_in, '(l1)', iostat = ierr) tmpLogical
         if ( ierr .eq. 0 ) THEN
            only_save_dissMat = tmpLogical
+           READ(fu_in, '(i)', iostat = ierr) checkptFreq
+           if ( ierr .ne. 0 ) THEN
+              checkptFreq = 1e5
+           ENDIF
         ENDIF
      endif
 
@@ -217,14 +222,20 @@ program cluster
      
   endif
 
+  if (myRank .eq. ROOT) then
+     write(*,*) ' checkptFreq = ', checkptFreq
+  endif
+  
+
   call MPI_BCast(inDir, len(inDir), MPI_CHARACTER, ROOT, MPI_COMM_WORLD, ierr)
-  call MPI_BCast(start_year, 1, MPI_INTEGER, ROOT, MPI_COMM_WORLD, ierr)
-  call MPI_BCast(start_mon,  1, MPI_INTEGER, ROOT, MPI_COMM_WORLD, ierr)
-  call MPI_BCast(start_day,  1, MPI_INTEGER, ROOT, MPI_COMM_WORLD, ierr)
-  call MPI_BCast(end_year,   1, MPI_INTEGER, ROOT, MPI_COMM_WORLD, ierr)
-  call MPI_BCast(end_mon,    1, MPI_INTEGER, ROOT, MPI_COMM_WORLD, ierr)
-  call MPI_BCast(end_day,    1, MPI_INTEGER, ROOT, MPI_COMM_WORLD, ierr)
-  call MPI_BCast(linkage,    1, MPI_INTEGER, ROOT, MPI_COMM_WORLD, ierr)
+  call MPI_BCast(start_year,  1, MPI_INTEGER, ROOT, MPI_COMM_WORLD, ierr)
+  call MPI_BCast(start_mon,   1, MPI_INTEGER, ROOT, MPI_COMM_WORLD, ierr)
+  call MPI_BCast(start_day,   1, MPI_INTEGER, ROOT, MPI_COMM_WORLD, ierr)
+  call MPI_BCast(end_year,    1, MPI_INTEGER, ROOT, MPI_COMM_WORLD, ierr)
+  call MPI_BCast(end_mon,     1, MPI_INTEGER, ROOT, MPI_COMM_WORLD, ierr)
+  call MPI_BCast(end_day,     1, MPI_INTEGER, ROOT, MPI_COMM_WORLD, ierr)
+  call MPI_BCast(linkage,     1, MPI_INTEGER, ROOT, MPI_COMM_WORLD, ierr)
+  call MPI_BCast(checkptFreq, 1, MPI_INTEGER, ROOT, MPI_COMM_WORLD, ierr)
   call MPI_BCast(useFractionOfRegion, 1, MPI_INTEGER, ROOT, MPI_COMM_WORLD, ierr)
   call MPI_BCast(gemMachFieldName, len(gemMachFieldName), &
        MPI_CHARACTER, ROOT, MPI_COMM_WORLD, ierr)
@@ -1370,16 +1381,17 @@ program cluster
      clusterSize(K1) = clusterSize(K1) + clusterSize(K2)
      clusterSize(K2) = 0
      
-     if ( MOD(K, 100000) .eq. 0 ) THEN
+     if ( MOD(K, checkptFreq) .eq. 0 ) THEN
         ! Increment the step because we're *done* this step
         !!! TODO:
         !!!      Need to save more information in the checkpoint so
         !!!      the correct file is loaded for a given run if there
         !!!      are multiple, different runs in the same output dir
-        call save_cluster_checkpoint(numPoints, numClustersThisNode, myRank, &
-                                     numProcs, myClusters, clusterRanks,     &
-                                     clusterDissimilarities, clusterPairs,   &
-                                     live, PQueue, K+1, NODES, outdir)
+        ! call save_cluster_checkpoint(numPoints, numClustersThisNode, myRank, &
+        !                              numProcs, myClusters, clusterRanks,     &
+        !                              clusterDissimilarities, clusterPairs,   &
+        !                              live, PQueue, K+1, NODES, outdir)
+        call save_cluster_checkpoint(K+1)
      endif
 
   ENDDO
@@ -1400,32 +1412,41 @@ program cluster
 129  FORMAT(a,i7.7,'_',i2.2, '_clusters.dat')
      open( uid, file=trim(dataFileName), form='formatted', action='write', &
           status='replace', iostat=ierr)
-     write(uid,*) 'xx\tlki\tlkj'
-     DO K = 1, numPoints - 1
-        write(uid,125) clusterDissimilarities(K), clusterPairs(K,1), clusterPairs(K,2)
-     ENDDO
-125  FORMAT(f8.4, 10x, i5, 5x, i5)
+
+     if (numPoints .le. 1e5) then
+        write(uid,'(a8, 10x, a5, 5x, a5)') 'xx', 'lki', 'lkj'
+        DO K = 1, numPoints - 1
+           write(uid,125) clusterDissimilarities(K), clusterPairs(K,1), clusterPairs(K,2)
+        ENDDO
+125     FORMAT(f8.4, 10x, i5, 5x, i5)
+     elseif (numPoints .le. 1e9) then 
+        write(uid,'(a8, 10x, a9, 5x, a9)') 'xx', 'lki', 'lkj'
+        DO K = 1, numPoints - 1
+           write(uid,125) clusterDissimilarities(K), clusterPairs(K,1), clusterPairs(K,2)
+        ENDDO
+130     FORMAT(f8.4, 10x, i9, 5x, i9)
+     else
+        write(uid,'(a8, 10x, a9, 5x, a9)') 'xx', 'lki', 'lkj'
+        DO K = 1, numPoints - 1
+           write(uid,130) clusterDissimilarities(K), clusterPairs(K,1), clusterPairs(K,2)
+        ENDDO
+        write(uid,'(a8, 10x, a15, 5x, a15)') 'xx', 'lki', 'lkj'
+131     FORMAT(f8.4, 10x, i15, 5x, i15)
+        DO K = 1, numPoints - 1
+           write(uid,131) clusterDissimilarities(K), clusterPairs(K,1), clusterPairs(K,2)
+        ENDDO
+     endif
+
      close(uid)
   ENDIF
 
   call MPI_FINALIZE(IERR)
 
 CONTAINS
-  subroutine save_cluster_checkpoint(numPoints, numClustersThisNode, myRank,   &
-                                     numProcs, myClusters, clusterRanks,        &
-                                     clusterDissimilarities, clusterPairs,     &
-                                     live, PQueues, step, NODES, outputDir)
+  subroutine save_cluster_checkpoint(step)
 
-    integer, intent(IN)       :: numPoints, numClustersThisNode, myRank, numProcs
-    integer, intent(IN)       :: myClusters(numClustersThisNode)
-    integer, intent(IN)       :: clusterRanks(numPoints)
-    real*4,  intent(IN)       :: clusterDissimilarities(numPoints - 1)
-    integer, intent(IN)       :: clusterPairs(numPoints - 1, 2)
-    logical, intent(IN)       :: live(numPoints)
-    TYPE(THEAP), intent(IN)   :: PQueues(numClustersThisNode)
-    integer, intent(IN)       :: step
-    real*8,  intent(IN)       :: nodes(numClustersThisNode, numPoints, 2)
-    character(len=*), intent(IN):: outputDir
+    integer, intent(IN)       :: STEP
+
 
     integer                   :: ii, i, J, K
     integer                   :: liveClusters, liveClustersThisNode
@@ -1467,30 +1488,22 @@ CONTAINS
        END IF
     END DO
 
-! 212 format('( " NODES( ", i0, ",LIVE,", i0, " ) = ", ', i0, '( g12.4, ", ") )')
-!     write(fmt, 212) liveClusters
-!     DO II = 1, numClustersThisNode
-!        I = myClusters(II)
-!        if (LIVE(I)) &
-!             write(*, fmt) I,1, pack(NODES(II, :, 1), live)
-!     ENDDO
-! 213 format('( " NODES( ", i0, ",LIVE,", i0, " ) = ", ', i0, '( i0, ", ") )')
-!     write(fmt, 212) liveClusters
-!     DO II = 1, numClustersThisNode
-!        I = myClusters(II)
-!        if (LIVE(I)) &
-!             write(*, fmt) I,2, INT(pack(NODES(II, :, 2), live))
-!     ENDDO
-
-
     ! the LIVE array is the same in every task and the number of .TRUE.
     ! values in that array should be the length of the MPI_Type_cotiguous.
     ! We will also need to set the file view by creating a block. Basically,
     ! we need to redo the saveDissMat block but replacing numPoints with
     ! the number of .TRUE. values in live.
-199 format('checkpoint-', i9.9, '.bin')
-    write(checkpointFileName, 199), step
-    checkpointFileName = trim(outputDir) // checkpointFileName
+199 FORMAT(a,i4.4,i2.2,i2.2, '_', i4.4,i2.2,i2.2,'_', 2(i2.2, '_'), &
+         i4.4, 'x', i4.4, '_checkpoint-', i9.9, '.bin')
+198 FORMAT(a, i7.7,'_',i2.2, '_checkpoint-', i9.9, '.bin')
+
+    if (is_aircraft_data) then
+       WRITE(checkpointFileName,198) trim(outDir), grid_ni, linkage, step
+    else
+       WRITE(checkpointFileName,199) trim(outDir), start_year, start_mon,     &
+            start_day, end_year, end_mon, end_day, forecastHour,  &
+            linkage, grid_ni, grid_nj, step
+    end if
     
     call MPI_FILE_OPEN(MPI_COMM_WORLD, checkpointFilename, MPI_MODE_CREATE + MPI_MODE_WRONLY, MPI_INFO_NULL, mpi_uid, ierr)
     IF (IERR .ne. MPI_SUCCESS) THEN
@@ -1857,7 +1870,6 @@ CONTAINS
             linkage, grid_ni, grid_nj
     end if
   end subroutine get_dissMat_filename
-
   subroutine init_linkage(linkage)
     ! Set up the variables for calculating the combined cluster
     ! distance metric based on one of 7 linkage methods
