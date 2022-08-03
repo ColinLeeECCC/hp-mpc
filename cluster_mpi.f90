@@ -27,6 +27,7 @@ program cluster
   logical                    :: is_aircraft_data
   logical                    :: only_save_dissMat,tmpLogical
   integer                    :: checkptFreq
+  logical                    :: exit_after_checkpt
   character(256)             :: inDir, outDir
   integer                    :: start_year, start_mon, start_day
   integer                    ::   end_year,   end_mon,   end_day
@@ -203,6 +204,12 @@ program cluster
            READ(fu_in, '(i)', iostat = ierr) checkptFreq
            if ( ierr .ne. 0 ) THEN
               checkptFreq = 1e5
+           else
+              exit_after_checkpt = .false.
+              READ(fu_in, '(L)', iostat = ierr) tmpLogical
+              if ( ierr .eq. 0 ) THEN
+                 exit_after_checkpt = tmpLogical
+              ENDIF
            ENDIF
         ENDIF
      endif
@@ -224,6 +231,7 @@ program cluster
 
   if (myRank .eq. ROOT) then
      write(*,*) ' checkptFreq = ', checkptFreq
+     write(*,*) ' exit_after_checkpt = ', exit_after_checkpt
   endif
   
 
@@ -243,6 +251,7 @@ program cluster
        MPI_CHARACTER, ROOT, MPI_COMM_WORLD, ierr)
   call MPI_BCast(outdir, len(outdir), MPI_CHARACTER, ROOT, MPI_COMM_WORLD, ierr)
   call MPI_BCast(only_save_dissMat, 1, MPI_LOGICAL, ROOT, MPI_COMM_WORLD, ierr)
+  call MPI_BCast(exit_after_checkpt, 1, MPI_LOGICAL, ROOT, MPI_COMM_WORLD, ierr)
 
   if (.not. is_aircraft_data) then
      strLen = len_trim(inDir)
@@ -618,8 +627,8 @@ program cluster
                  ELSE
                     I = II - 1 - dissSizeI + dissStartJ
                  ENDIF
-                 GRIDJ = (I - 1) / GRID_NJ + 1
-                 GRIDI = (I - 1) - (GRIDJ - 1) * GRID_NJ + 1
+                 GRIDJ = (I - 1) / GRID_NI + 1
+                 GRIDI = (I - 1) - (GRIDJ - 1) * GRID_NI + 1
                  TRACER_TMP = BUFFER( GRIDI, GRIDJ )
 
                  TRACER_SUM(II)   = TRACER_SUM(II)   + TRACER_TMP
@@ -628,8 +637,8 @@ program cluster
                  IF ( II .le. dissSizeI ) THEN
                     DO JJ = 1,dissSizeJ
                        J = JJ - 1 + dissStartJ
-                       GRIDJ2 = (J - 1) / GRID_NJ + 1
-                       GRIDI2 = (J - 1) - ( GRIDJ2 - 1 ) * GRID_NJ + 1
+                       GRIDJ2 = (J - 1) / GRID_NI + 1
+                       GRIDI2 = (J - 1) - ( GRIDJ2 - 1 ) * GRID_NI + 1
                        TRACER_TMP2 = BUFFER( GRIDI2, GRIDJ2 )
 
                        TRACER_XYSUM( II, JJ ) = TRACER_XYSUM( II, JJ ) + &
@@ -649,15 +658,15 @@ program cluster
                  I = myClusters(II)
                  ! GRIDI = (I - 1) / GRID_NJ + 1
                  ! GRIDJ = (I - 1) - (GRIDI - 1) * GRID_NJ + 1
-                 GRIDJ = (I - 1) / GRID_NJ + 1
-                 GRIDI = (I - 1) - (GRIDJ - 1) * GRID_NJ + 1
+                 GRIDJ = (I - 1) / GRID_NI + 1
+                 GRIDI = (I - 1) - (GRIDJ - 1) * GRID_NI + 1
                  TRACER_TMP = BUFFER( GRIDI, GRIDJ )
 
                  DO J = 1,numPoints
                     ! GRIDI2 = (J - 1) / GRID_NJ + 1
                     ! GRIDJ2 = (J - 1) - ( GRIDI2 - 1 ) * GRID_NJ + 1
-                    GRIDJ2 = (J - 1) / GRID_NJ + 1
-                    GRIDI2 = (J - 1) - ( GRIDJ2 - 1 ) * GRID_NJ + 1
+                    GRIDJ2 = (J - 1) / GRID_NI + 1
+                    GRIDI2 = (J - 1) - ( GRIDJ2 - 1 ) * GRID_NI + 1
                     TRACER_TMP2 = BUFFER( GRIDI2, GRIDJ2 )
 
                     TRACER_XYSUM( II, J ) = TRACER_XYSUM( II, J ) + &
@@ -673,8 +682,8 @@ program cluster
               DO I = 1,numPoints
                  ! GRIDI = (I - 1) / GRID_NJ + 1
                  ! GRIDJ = (I - 1) - (GRIDI - 1) * GRID_NJ + 1
-                 GRIDJ = (I - 1) / GRID_NJ + 1
-                 GRIDI = (I - 1) - (GRIDJ - 1) * GRID_NJ + 1
+                 GRIDJ = (I - 1) / GRID_NI + 1
+                 GRIDI = (I - 1) - (GRIDJ - 1) * GRID_NI + 1
                  TRACER_TMP = BUFFER( GRIDI, GRIDJ )
 
                  TRACER_SUM( I )   = TRACER_SUM( I )   + TRACER_TMP
@@ -1392,6 +1401,11 @@ program cluster
         !                              clusterDissimilarities, clusterPairs,   &
         !                              live, PQueue, K+1, NODES, outdir)
         call save_cluster_checkpoint(K+1)
+        if (exit_after_checkpt) then
+           call MPI_Barrier( MPI_COMM_WORLD, ierr )
+           call MPI_FINALIZE(IERR)
+           stop
+        endif
      endif
 
   ENDDO
@@ -1421,15 +1435,11 @@ program cluster
 125     FORMAT(f8.4, 10x, i5, 5x, i5)
      elseif (numPoints .le. 1e9) then 
         write(uid,'(a8, 10x, a9, 5x, a9)') 'xx', 'lki', 'lkj'
-        DO K = 1, numPoints - 1
-           write(uid,125) clusterDissimilarities(K), clusterPairs(K,1), clusterPairs(K,2)
-        ENDDO
 130     FORMAT(f8.4, 10x, i9, 5x, i9)
-     else
-        write(uid,'(a8, 10x, a9, 5x, a9)') 'xx', 'lki', 'lkj'
         DO K = 1, numPoints - 1
            write(uid,130) clusterDissimilarities(K), clusterPairs(K,1), clusterPairs(K,2)
         ENDDO
+     else
         write(uid,'(a8, 10x, a15, 5x, a15)') 'xx', 'lki', 'lkj'
 131     FORMAT(f8.4, 10x, i15, 5x, i15)
         DO K = 1, numPoints - 1
