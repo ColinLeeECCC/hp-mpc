@@ -41,7 +41,7 @@ program cluster
   real                       :: start_julian, end_julian
 
   ! data file variables
-  integer                    :: forecastHour
+  integer                    :: forecastHour, startTimestep
   character(256)             :: dataFileName, acFileName
   integer                    :: ncId, variableId
   integer, dimension(NF90_MAX_VAR_DIMS) &
@@ -183,6 +183,8 @@ program cluster
 
      if ( .not. is_aircraft_data ) then
         READ(fu_in, '(a256)') inDir ! data where compressed netcdf GEM-MACH data is stored
+        READ(fu_in, '(i2)') forecastHour
+        READ(fu_in, '(i)') startTimestep
         READ(fu_in, '(i4,2(1x,i2.2))') start_year, start_mon, start_day
         READ(fu_in, '(i4,2(1x,i2.2))')   end_year,   end_mon,   end_day
         READ(fu_in, *) linkage
@@ -236,14 +238,16 @@ program cluster
   
 
   call MPI_BCast(inDir, len(inDir), MPI_CHARACTER, ROOT, MPI_COMM_WORLD, ierr)
-  call MPI_BCast(start_year,  1, MPI_INTEGER, ROOT, MPI_COMM_WORLD, ierr)
-  call MPI_BCast(start_mon,   1, MPI_INTEGER, ROOT, MPI_COMM_WORLD, ierr)
-  call MPI_BCast(start_day,   1, MPI_INTEGER, ROOT, MPI_COMM_WORLD, ierr)
-  call MPI_BCast(end_year,    1, MPI_INTEGER, ROOT, MPI_COMM_WORLD, ierr)
-  call MPI_BCast(end_mon,     1, MPI_INTEGER, ROOT, MPI_COMM_WORLD, ierr)
-  call MPI_BCast(end_day,     1, MPI_INTEGER, ROOT, MPI_COMM_WORLD, ierr)
-  call MPI_BCast(linkage,     1, MPI_INTEGER, ROOT, MPI_COMM_WORLD, ierr)
-  call MPI_BCast(checkptFreq, 1, MPI_INTEGER, ROOT, MPI_COMM_WORLD, ierr)
+  call MPI_BCast(forecastHour,  1, MPI_INTEGER, ROOT, MPI_COMM_WORLD, ierr)
+  call MPI_BCast(startTimestep, 1, MPI_INTEGER, ROOT, MPI_COMM_WORLD, ierr)
+  call MPI_BCast(start_year,    1, MPI_INTEGER, ROOT, MPI_COMM_WORLD, ierr)
+  call MPI_BCast(start_mon,     1, MPI_INTEGER, ROOT, MPI_COMM_WORLD, ierr)
+  call MPI_BCast(start_day,     1, MPI_INTEGER, ROOT, MPI_COMM_WORLD, ierr)
+  call MPI_BCast(end_year,      1, MPI_INTEGER, ROOT, MPI_COMM_WORLD, ierr)
+  call MPI_BCast(end_mon,       1, MPI_INTEGER, ROOT, MPI_COMM_WORLD, ierr)
+  call MPI_BCast(end_day,       1, MPI_INTEGER, ROOT, MPI_COMM_WORLD, ierr)
+  call MPI_BCast(linkage,       1, MPI_INTEGER, ROOT, MPI_COMM_WORLD, ierr)
+  call MPI_BCast(checkptFreq,   1, MPI_INTEGER, ROOT, MPI_COMM_WORLD, ierr)
   call MPI_BCast(useFractionOfRegion, 1, MPI_INTEGER, ROOT, MPI_COMM_WORLD, ierr)
   call MPI_BCast(gemMachFieldName, len(gemMachFieldName), &
        MPI_CHARACTER, ROOT, MPI_COMM_WORLD, ierr)
@@ -268,12 +272,12 @@ program cluster
      WRITE(*,*) ' Using field ', fieldName, '(', gemMachFieldName, ')'
      WRITE(*,*) ' Ouputting to ', trim(outDir)
 
-     forecastHour = 18
-
+     ! forecastHour = 18
+     
      ! Read in a single file to get model domain size
 103  FORMAT(A, i4.4, i2.2, i2.2, i2.2 '_', i6.6, 'p.netcdf4.compressed')
      WRITE(dataFileName, 103), trim(inDir), start_year, start_mon, start_day, &
-          forecastHour, 60
+          forecastHour, startTimestep
      ierr = nf90_opeN( trim(dataFileName), NF90_NOWRITE, ncId )
      IF (ierr < 0) THEN
         WRITE(*,*) 'Error while opening ', trim(dataFileName)
@@ -601,11 +605,11 @@ program cluster
         DO IHR = 1, 24
            ! WRITE(*,'(10x,a,i2.2,a,i2.2)') 'Hr: ', IHR, ':', 0
            WRITE(dataFileName, 108), trim(inDir), current_date, &
-                forecastHour, IHR * 60
+                forecastHour, startTimestep + (IHR-1)*60
            ierr = nf90_open( trim(dataFileName), NF90_NOWRITE, ncId, &
                 comm=MPI_COMM_WORLD, info=MPI_INFO_NULL)
            IF (ierr < 0) THEN
-              WRITE(*,*) 'Error while opening ', trim(dataFileName)
+              WRITE(*,*) 'Error while opening "', trim(dataFileName), '"'
               call MPI_Abort(MPI_COMM_WORLD, 2, IERR)
            ENDIF
 
@@ -614,7 +618,7 @@ program cluster
            ierr = nf90_get_var( ncid, variableId, buffer)
            ierr = nf90_close( ncId )
 
-           HRS_SINCE_START = 24 * ( IDAY - 1 ) + IHR
+           HRS_SINCE_START = 24 * ( IDAY - 1 ) + IHR - 1
            IF ( tileDissMat ) THEN
               !$OMP PARALLEL DO                       &
               !$OMP DEFAULT( SHARED )                 &
@@ -630,6 +634,10 @@ program cluster
                  GRIDJ = (I - 1) / GRID_NI + 1
                  GRIDI = (I - 1) - (GRIDJ - 1) * GRID_NI + 1
                  TRACER_TMP = BUFFER( GRIDI, GRIDJ )
+                 if (tracer_tmp == 0d0) then
+109                 format('(', i, ', ', i, ') = 0d0!')
+                    write(*,109) GRIDI, GRIDJ
+                 endif
 
                  TRACER_SUM(II)   = TRACER_SUM(II)   + TRACER_TMP
                  TRACER_SQSUM(II) = TRACER_SQSUM(II) + TRACER_TMP * TRACER_TMP
@@ -729,7 +737,7 @@ program cluster
               IF ( SXX .eq. 0d0 .or. SYY .eq. 0d0 ) THEN
                  R = -1d0
                  if (.not. is_aircraft_data) then
-                    WRITE(*,*) 'Got bad statistics at ', N, '(', II, '), ', JJ
+                    WRITE(*,*) 'Got bad statistics at ', N, '(', II, '), ', JJ, '(', J, ')'
                     WRITE(*,*) 'Ex = ', tracer_sum(II), 'Ey = ', tracer_sum(JJ + dissSizeI)
                     WRITE(*,*) 'Ex2 = ', tracer_sqsum(II), 'Ey2 = ', tracer_sqsum(JJ + dissSizeI)
                     WRITE(*,*) 'SXY = ', SXY, 'SXX = ', SXX, 'SYY = ', SYY
