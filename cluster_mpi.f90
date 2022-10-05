@@ -378,10 +378,44 @@ program cluster
   ALLOCATE(LIVE(numPoints))
   ALLOCATE(heapIdx(numClustersThisNode,numPoints))
   ALLOCATE(clusterSize(numPoints))
+  IF ( myRank .eq. ROOT ) THEN
+     ALLOCATE(clusterPairs(numPoints - 1, 2))
+     ALLOCATE(clusterDissimilarities(numPoints - 1))
+  ENDIF
   WRITE(*,*) ' Allocated'
 
   clusterSize = 1
   live = .true.
+  uid = 15
+
+  startStep = 1
+  ! See if we are loading from a checkpoint file
+  dataFileName = trim(outDir) // '/checkpoint.bin'
+  inquire(file=dataFileName, exist=fileExists)
+  if (fileExists) then
+     call load_cluster_checkpoint(numPoints, numClustersThisNode, myRank, &
+                                  numProcs, myClusters, clusterRanks,     &
+                                  clusterDissimilarities, clusterPairs,   &
+                                  live, PQueue, startStep, NODES, outdir)
+
+    
+     DO II = 1, numClustersThisNode
+        I = myClusters(II)
+        call pQueue(II) % init( int(numPoints,4), 2, GREATER1 )
+        
+        IF ( .not. LIVE(I) ) cycle
+        
+        DO J = 1, numPoints
+           IF (I .eq. J) CYCLE
+           IF (.not. LIVE(J)) cycle
+
+           NODES(II,J,2) = real(J,8)
+           CALL PQueue(II)%INSERT( NODES(II,J,:), heapIdx(II,J) )
+        ENDDO
+
+     ENDDO
+  else
+     
 
   ! for very large numPoints, our files get too big. The file system seems
   ! more than happy to go as big as we would like, but the problem is
@@ -396,7 +430,6 @@ program cluster
   ! because it already exists, or because we computed it tilewise and
   ! saved it out to be read in by the appropriate nodes
   loadDissMatrix = .true.
-  uid = 15
   WRITE(*,*) ' Checking if ', trim(dataFileName), ' exists...'
   inquire(file=dataFileName, exist=fileExists)
   startTimer = MPI_Wtime()
@@ -1055,51 +1088,20 @@ program cluster
      endTimer = MPI_Wtime()
      WRITE(*,*) 'Saving dissimilarity matrix took ', endTimer - startTimer, ' seconds'
   ENDIF
-
+  endif ! Exists cluster file?
+  
   ALLOCATE( mpiNodes( 3, numProcs ) )
   call MPI_TYPE_CONTIGUOUS( 3, MPI_FLOAT, nodeType, ierr )
   call MPI_TYPE_COMMIT( nodeType, ierr )
   ALLOCATE(NODESK1(2,numPoints))
   ALLOCATE(NODESK2(2,numPoints))
   ALLOCATE(VISITED(numPoints))
-  IF ( myRank .eq. ROOT ) THEN
-     ALLOCATE(clusterPairs(numPoints - 1, 2))
-     ALLOCATE(clusterDissimilarities(numPoints - 1))
-  ENDIF
 
   startTimer = MPI_Wtime()
 
   ! to save time on some metrics, save the Lance-Williams coefficients
   ! in advance
   call init_linkage(linkage)
-
-  startStep = 1
-  ! See if we are loading from a checkpoint file
-  dataFileName = trim(outDir) // '/checkpoint.bin'
-  inquire(file=dataFileName, exist=fileExists)
-  if (fileExists) then
-     call load_cluster_checkpoint(numPoints, numClustersThisNode, myRank, &
-                                  numProcs, myClusters, clusterRanks,     &
-                                  clusterDissimilarities, clusterPairs,   &
-                                  live, PQueue, startStep, NODES, outdir)
-
-    
-     DO II = 1, numClustersThisNode
-        I = myClusters(II)
-        call pQueue(II) % clear()
-        
-        IF ( .not. LIVE(I) ) cycle
-        
-        DO J = 1, numPoints
-           IF (I .eq. J) CYCLE
-           IF (.not. LIVE(J)) cycle
-
-           NODES(II,J,2) = real(J,8)
-           CALL PQueue(II)%INSERT( NODES(II,J,:), heapIdx(II,J) )
-        ENDDO
-
-     ENDDO
-  endif
 
   ! Need to iterate this many times to get to a single cluster
   DO K = startStep, numPoints-1
