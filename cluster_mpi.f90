@@ -648,7 +648,8 @@ program cluster
 
            ierr = nf90_inq_varid( ncId, trim(gemMachFieldName), variableId )
            ierr = nf90_inquire_variable( ncId, variableId, dimIds = dimIds )
-           ierr = nf90_get_var( ncid, variableId, buffer)
+           ! ierr = nf90_get_var( ncid, variableId, buffer,start=(/ 226, 369 /))
+           ierr = nf90_get_var( ncid, variableId, buffer) 
            ierr = nf90_close( ncId )
 
            HRS_SINCE_START = 24 * ( IDAY - 1 ) + IHR - 1
@@ -1412,6 +1413,7 @@ program cluster
         !                              live, PQueue, K+1, NODES, outdir)
         call save_cluster_checkpoint(K+1)
         if (exit_after_checkpt) then
+           write(*,*) 'Finished writing checkpoint. Exiting'
            call MPI_Barrier( MPI_COMM_WORLD, ierr )
            call MPI_FINALIZE(IERR)
            stop

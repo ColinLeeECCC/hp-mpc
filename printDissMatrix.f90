@@ -71,23 +71,69 @@ PROGRAM	PRINTDISSMATRIX
         ! ENDDO
      ENDDO
   ELSE IF ( FTYPE .eq. 9 ) THEN
-     ALLOCATE(R(NPOINTS, NPOINTS))
-     ALLOCATE(T(NPOINTS*8))
-     DO I = 1,NPOINTS
-        ! there has to be a better way to do this but I can't think of it right now
-        ! i've tried a few obvious things and the don't work.
-        READ(uid,rec=I, iostat=stat) (T(J),J=1,NPOINTS*8)
-        if (stat < 0) then
-           write(*,*) ' Reached EOF at I = ', I
-           EXIT
-        else
-           
-        ENDIF
-        DO J = 1,NPOINTS
-           TMPI = T(((J-1)*8+1):(J*8))
-           R(I,J) = tmpr
+     if (npoints .le. 128) then
+        ALLOCATE(R(NPOINTS, NPOINTS))
+        ALLOCATE(T(NPOINTS*8))
+        DO I = 1,NPOINTS
+           ! there has to be a better way to do this but I can't think of it right now
+           ! i've tried a few obvious things and the don't work.
+           READ(uid,rec=I, iostat=stat) (T(J),J=1,NPOINTS*8)
+           if (stat < 0) then
+              write(*,*) ' Reached EOF at I = ', I
+              EXIT
+           else
+
+           ENDIF
+           DO J = 1,NPOINTS
+              TMPI = T(((J-1)*8+1):(J*8))
+              R(I,J) = tmpr
+           ENDDO
         ENDDO
-     ENDDO
+     else
+        ! For very large files, let's just read the corners and print them out
+        ALLOCATE(R(8, 8))
+        ALLOCATE(T(NPOINTS*8))
+        DO I = 1,4
+           READ(uid,rec=I,iostat=stat) (T(J),J=1,nPoints*8)
+           if (stat < 0) then
+              write(*,*) ' Reached EOF at I = ', I
+              stop
+           endif
+           DO J = 1,4
+              TMPI = T(((J-1)*8+1):(J*8))
+              R(I,J) = tmpr
+           ENDDO
+           DO J = 1,4
+              TMPI = T(((NPOINTS - 4 + J-1)*8+1):((NPOINTS - 4 + J)*8))
+              R(I,J+4) = tmpr
+           ENDDO
+        ENDDO
+        ! DO J = 4,NPOINTS-4
+        !    stat = FSEEK(uid, 8*npoints, 1)
+        !    if (stat /= 0) then
+        !       write(*,*) ' Something went wrong with the FSEEK command at J = ', J
+        !       error stop
+        !    endif
+        ! ENDDO
+        DO I = 1,4
+           READ(uid,rec=I+NPOINTS-4,iostat=stat) (T(J),J=1,nPoints*8)
+           if (stat < 0) then
+              write(*,*) ' Reached EOF at I = ', I
+              stop
+           endif
+           DO J = 1,4
+              TMPI = T(((J-1)*8+1):(J*8))
+              R(I+4,J) = tmpr
+           ENDDO
+           DO J = 1,4
+              TMPI = T(((NPOINTS - 4 + J-1)*8+1):((NPOINTS - 4 + J)*8))
+              R(I+4,J+4) = tmpr
+           ENDDO
+        ENDDO
+        ! Now set the number of points to 8 so we can print properly
+        nPoints=8
+     endif
+
   ENDIF
 
   close(uid)
@@ -121,6 +167,18 @@ PROGRAM	PRINTDISSMATRIX
        ENDDO
     endif
 
+    ! Output the middle row of the matrix to a text file
+    ! for plotting on a map
+    open(uid, file='output.txt', status='new', iostat=stat)
+    
+    if (ftype .ne. 4) then
+       J = nPoints / 2
+       DO I = 1,nPoints
+          WRITE(uid,*) -1, -1, -1, R(I,J)
+       enddo
+    endif
+    close(uid)
+    
 
 CONTAINS
   SUBROUTINE PRINT_USAGE()
