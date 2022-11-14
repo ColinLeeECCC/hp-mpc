@@ -31,9 +31,8 @@ program cluster
   character(256)             :: inDir, outDir
   integer                    :: start_year, start_mon, start_day
   integer                    ::   end_year,   end_mon,   end_day
-  integer                    :: useFractionOfRegion
+  character(256)             :: useFractionOfRegion
   character(8)               :: gemMachFieldName
-  character(8)               :: fieldName
   character(256)             :: ncFieldName
   integer                    :: strLen
   integer                    :: start_date, end_date, start_vec(8), end_vec(8)
@@ -47,7 +46,10 @@ program cluster
   integer, dimension(NF90_MAX_VAR_DIMS) &
        :: dimIds
   integer                    :: grid_ni, grid_nj, grid_nt
+  integer                    :: start_ni, start_nj
   integer                    :: gridi, gridj, gridi2, gridj2
+  integer                    :: limI, limJ
+  real*8                     :: ctrLat, ctrLon
   integer                    :: numPoints, numSpectral
   real*8, allocatable, dimension(:,:) &
                              :: buffer
@@ -188,14 +190,15 @@ program cluster
         READ(fu_in, '(i4,2(1x,i2.2))') start_year, start_mon, start_day
         READ(fu_in, '(i4,2(1x,i2.2))')   end_year,   end_mon,   end_day
         READ(fu_in, *) linkage
-        READ(fu_in, *) useFractionOfRegion
+        READ(fu_in, '(a)') useFractionOfRegion
         READ(fu_in, '(a8)') gemMachFieldName
-        READ(fu_in, '(a8)') fieldName
+        READ(fu_in, '(a8)') ncFieldName
      else
         READ(fu_in, '(a256)') acFileName ! data where compressed netcdf GEM-MACH data is stored
         READ(fu_in, *) linkage
         READ(fu_in, *) useFractionOfRegion
         READ(fu_in, '(a256)') ncFieldName
+        gemMachFieldName = ncFieldName(1:8)
      end if
      READ(fu_in, '(a256)', iostat = ierr) outDir
 
@@ -248,14 +251,35 @@ program cluster
   call MPI_BCast(end_day,       1, MPI_INTEGER, ROOT, MPI_COMM_WORLD, ierr)
   call MPI_BCast(linkage,       1, MPI_INTEGER, ROOT, MPI_COMM_WORLD, ierr)
   call MPI_BCast(checkptFreq,   1, MPI_INTEGER, ROOT, MPI_COMM_WORLD, ierr)
-  call MPI_BCast(useFractionOfRegion, 1, MPI_INTEGER, ROOT, MPI_COMM_WORLD, ierr)
+  call MPI_BCast(useFractionOfRegion,                     &
+       len(useFractionOfRegion), MPI_CHARACTER, ROOT, MPI_COMM_WORLD, ierr)
   call MPI_BCast(gemMachFieldName, len(gemMachFieldName), &
        MPI_CHARACTER, ROOT, MPI_COMM_WORLD, ierr)
-  call MPI_BCast(fieldName,        len(fieldName),        &
+  call MPI_BCast(ncFieldName,        len(ncFieldName),        &
        MPI_CHARACTER, ROOT, MPI_COMM_WORLD, ierr)
   call MPI_BCast(outdir, len(outdir), MPI_CHARACTER, ROOT, MPI_COMM_WORLD, ierr)
   call MPI_BCast(only_save_dissMat, 1, MPI_LOGICAL, ROOT, MPI_COMM_WORLD, ierr)
   call MPI_BCast(exit_after_checkpt, 1, MPI_LOGICAL, ROOT, MPI_COMM_WORLD, ierr)
+
+  limI = -1
+  limJ = -1
+  ctrLat = -999.0
+  ctrLon = -999.0
+  read(useFractionOfRegion,*,iostat=ierr) limI, limJ, ctrLat, ctrLon
+  if (ierr /= 0) then
+     read(useFractionOfRegion,*,iostat=ierr) limI, limJ
+     if (ierr /= 0) then
+        read(useFractionOfRegion,*,iostat=ierr) limI
+        if (ierr /= 0) then
+           write(*,*) 'Error reading useFractionOfRegion ''', &
+                useFractionOfRegion, ''''
+           error stop
+        endif
+        limJ = limI
+     endif
+  endif
+
+  write(*,*) 'limI = ', limI, ' limJ = ', limJ, ' ctrLat = ', ctrLat, ' ctrLon = ', ctrLon
 
   if (.not. is_aircraft_data) then
      strLen = len_trim(inDir)
@@ -263,13 +287,11 @@ program cluster
         inDir = trim(inDir) // '/'
      ENDIF
 
-
      WRITE(*,*) ' Reading compressed netcdf data from ', trim(inDir)
      WRITE(*,101) start_year, start_mon, start_day, end_year, end_mon, end_day
 101  FORMAT(' Doing ', i4, '-', i2, '-', i2, ' to ', i4, '-', i2, '-', i2)
-     WRITE(*,102) useFractionOfRegion, useFractionOfRegion
-102  FORMAT(' Using only ', i3, 'x', i3, ' cells of available GEM-MACH domain')
-     WRITE(*,*) ' Using field ', fieldName, '(', gemMachFieldName, ')'
+     WRITE(*,*) 'useFractionOfRegion = ', trim(useFractionOfRegion)
+     WRITE(*,*) ' Using field ', trim(ncFieldName), '(', trim(gemMachFieldName), ')'
      WRITE(*,*) ' Ouputting to ', trim(outDir)
 
      ! forecastHour = 18
@@ -278,26 +300,14 @@ program cluster
 103  FORMAT(A, i4.4, i2.2, i2.2, i2.2 '_', i6.6, 'p.netcdf4.compressed')
      WRITE(dataFileName, 103), trim(inDir), start_year, start_mon, start_day, &
           forecastHour, startTimestep
-     ierr = nf90_opeN( trim(dataFileName), NF90_NOWRITE, ncId )
-     IF (ierr < 0) THEN
-        WRITE(*,*) 'Error while opening ', trim(dataFileName)
-        call MPI_Abort(MPI_COMM_WORLD, 2, IERR)
-     ENDIF
 
-     ierr = nf90_inq_varid( ncId, trim(gemMachFieldName), variableId )
-     ierr = nf90_inquire_variable( ncId, variableId, dimIds = dimIds )
-     ierr = nf90_inquire_dimension( ncID, dimIds(1), len = grid_ni )
-     ierr = nf90_inquire_dimension( ncID, dimIds(2), len = grid_nj )
-     ierr = nf90_inquire_dimension( ncID, dimIds(3), len = grid_nt )
+     call get_domain( dataFileName, gemMachFieldName, limI, limJ, ctrLat, ctrLon, &
+          grid_ni, grid_nj, grid_nt, start_ni, start_nj)
 
-     ierr = nf90_close( ncId )
-
-     ! grid_ni = grid_ni / useFractionOfRegion
-     ! grid_nj = grid_nj / useFractionOfRegion
-     if (useFractionOfRegion .ne. -1) then
-        grid_ni = useFractionOfRegion
-        grid_nj = useFractionOfRegion
-     end if
+102  FORMAT(' Using only ', i3, ':', i3, ',', i3,':',i3, ' cells of available GEM-MACH domain, centred at ', f8.2, ', ', f8.2)
+     write(*,102) start_ni, grid_ni, start_nj, grid_nj, ctrLat, ctrLon
+     
+     
      numPoints = grid_ni * grid_nj
   else
 
@@ -314,14 +324,13 @@ program cluster
 
      forecastHour = 18
 
-
      call check( nf90_inq_varid( ncId, trim(ncFieldName), variableId ) )
      call check( nf90_inquire_variable( ncId, variableId, dimIds = dimIds ) )
      call check( nf90_inquire_dimension( ncID, dimIds(1), len = grid_ni ) )
      call check( nf90_inquire_dimension( ncID, dimIds(2), len = grid_nj ) )
 
-     if (useFractionOfRegion .ne. -1) then
-        grid_ni = useFractionOfRegion
+     if (limI .ne. -1) then
+        grid_ni = limI
      end if
      numPoints = grid_ni
      numSpectral = grid_nj
@@ -422,7 +431,7 @@ program cluster
   ! when we try to MPI_SET_VIEW we can overflow MPI_OFFSET_KIND. The limit seems
   ! to be
   call get_dissMat_filename(dataFileName, outDir, is_aircraft_data,     &
-                            linkage, grid_ni, grid_nj,                  &
+                            gemMachFieldName, linkage, grid_ni, grid_nj,&
                             start_year, start_mon, start_day,           &
                             end_year, end_mon, end_day, forecastHour   )
   
@@ -535,7 +544,7 @@ program cluster
         ENDIF
         write(*,*) 'Closed ', trim(dataFileName)
         
-        IF ( useFractionOfRegion .ne. -1 ) then
+        IF ( limI .ne. -1 ) then
            DO I = 1,numPoints
               WRITE(*,1111) BUFFER(I,1:10)
            END DO
@@ -648,8 +657,7 @@ program cluster
 
            ierr = nf90_inq_varid( ncId, trim(gemMachFieldName), variableId )
            ierr = nf90_inquire_variable( ncId, variableId, dimIds = dimIds )
-           ! ierr = nf90_get_var( ncid, variableId, buffer,start=(/ 226, 369 /))
-           ierr = nf90_get_var( ncid, variableId, buffer) 
+           ierr = nf90_get_var( ncid, variableId, buffer,start=(/ start_ni, start_nj /))
            ierr = nf90_close( ncId )
 
            HRS_SINCE_START = 24 * ( IDAY - 1 ) + IHR - 1
@@ -800,8 +808,8 @@ program cluster
 
         ! Now we save out the tile of the dissimilarity matrix we computed.
         call get_dissMat_filename(dataFileName, outDir, is_aircraft_data,  &
-             linkage, grid_ni, grid_nj, start_year, start_mon, start_day,  &
-             end_year, end_mon, end_day, forecastHour)
+             gemMachFieldName, linkage, grid_ni, grid_nj, start_year, start_mon,&
+             start_day, end_year, end_mon, end_day, forecastHour)
 
         call MPI_FILE_OPEN(MPI_COMM_WORLD, trim(dataFileName), MPI_MODE_CREATE + MPI_MODE_WRONLY, MPI_INFO_NULL, mpi_uid, ierr)
         IF (IERR .ne. MPI_SUCCESS) THEN
@@ -1046,8 +1054,8 @@ program cluster
      startTimer = MPI_Wtime()
      WRITE(*,*) 'Saving dissimilarity matrix...'
      call get_dissMat_filename(dataFileName,outDir, is_aircraft_data,   &
-          linkage, grid_ni, grid_nj, start_year, start_mon, start_day,  &
-          end_year, end_mon, end_day, forecastHour)
+          gemMachFieldName, linkage, grid_ni, grid_nj, start_year, start_mon,&
+          start_day, end_year, end_mon, end_day, forecastHour)
 
      WRITE(*,*) 'Opening'
      call MPI_FILE_OPEN(MPI_COMM_WORLD, trim(dataFileName), MPI_MODE_CREATE + MPI_MODE_WRONLY, MPI_INFO_NULL, mpi_uid, ierr)
@@ -1431,10 +1439,10 @@ program cluster
      else
         WRITE(dataFileName,126) trim(outDir), start_year, start_mon,     &
              start_day, end_year, end_mon, end_day, forecastHour,  &
-             linkage, grid_ni, grid_nj
+             trim(gemMachFieldName), linkage, grid_ni, grid_nj
      end if
-126  FORMAT(a,i4.4,i2.2,i2.2, '_', i4.4,i2.2,i2.2,'_', 2(i2.2, '_'), &
-          i4.4, 'x', i4.4, '_clusters.dat')
+126  FORMAT(a,i4.4,i2.2,i2.2, '_', i4.4,i2.2,i2.2,'_', i2.2, '_', &
+          a, '_', i2.2, '_',           i4.4, 'x', i4.4, '_clusters.dat')
 129  FORMAT(a,i7.7,'_',i2.2, '_clusters.dat')
      open( uid, file=trim(dataFileName), form='formatted', action='write', &
           status='replace', iostat=ierr)
@@ -1867,29 +1875,30 @@ CONTAINS
   end subroutine load_cluster_checkpoint
 
     
-  subroutine get_dissMat_filename(fileName, outDir, is_aircraft_data, &
-       linkage, grid_ni, grid_nj, start_year, start_mon, start_day,   &
+  subroutine get_dissMat_filename(fileName, outDir, is_aircraft_data,            &
+       fieldName, linkage, grid_ni, grid_nj, start_year, start_mon, start_day,   &
        end_year, end_mon, end_day, forecastHour)
 
     character(256), intent(out) :: fileName
     character(256), intent(in)  :: outDir
     logical, intent(in)         :: is_aircraft_data
+    character(8), intent(in)    :: fieldName
     integer, intent(in)         :: linkage
     integer, intent(in)         :: grid_ni, grid_nj
     integer, intent(in)         :: start_year, start_mon, start_day
     integer, intent(in)         :: end_year, end_mon, end_day
     integer, intent(in)         :: forecastHour
 
-107 FORMAT(a,i4.4,i2.2,i2.2, '_', i4.4,i2.2,i2.2,'_', 2(i2.2, '_'), &
-         i4.4, 'x', i4.4, '_mpio.bin')
-108 FORMAT(a, i7.7,'_',i2.2, '_mpio.bin')
+107 FORMAT(a,i4.4,i2.2,i2.2, '_', i4.4,i2.2,i2.2,'_', i2.2, '_', &
+          A, '_', i4.4, 'x', i4.4, '_mpio.bin')
+108 FORMAT(a, 'AC_', i7.7, '_mpio.bin')
 
     if (is_aircraft_data) then
-       WRITE(fileName,108) trim(outDir), grid_ni, linkage
+       WRITE(fileName,108) trim(outDir), grid_ni
     else
        WRITE(dataFileName,107) trim(outDir), start_year, start_mon,     &
             start_day, end_year, end_mon, end_day, forecastHour,  &
-            linkage, grid_ni, grid_nj
+            trim(fieldName), grid_ni, grid_nj
     end if
   end subroutine get_dissMat_filename
   subroutine init_linkage(linkage)
@@ -1981,6 +1990,127 @@ CONTAINS
        call MPI_Abort(MPI_COMM_WORLD, 7, IERR)
     end select
   end subroutine calc_new_distance
+
+  subroutine get_domain(dataFileName, fieldName, limI, limJ, &
+       ctrLat, ctrLon, grid_ni, grid_nj, grid_nt, start_ni, start_nj)
+
+    character(256), intent(in)       :: dataFileName
+    character(8),   intent(in)       :: fieldName
+    integer,        intent(in)       :: limI, limJ
+    real*8,         intent(in)       :: ctrLat, ctrLon
+    integer,        intent(out)      :: grid_ni, grid_nj, grid_nt
+    integer,        intent(out)      :: start_ni, start_nj
+
+    integer                          :: ierr, i, j, m(2)
+    integer                          :: ncId, variableId
+    integer                          :: nvar, latVarId, lonVarId
+    integer                          :: ni, nj, lat_ni, lat_nj, lon_ni, lon_nj
+    integer, dimension(NF90_MAX_VAR_DIMS)   :: dimIds, dimIds2
+    character(256)                   :: std_name
+    real*8, allocatable, dimension(:,:) :: lat, lon, delta
+    integer                          :: limI_lcl, limJ_lcl
+
+     ierr = nf90_opeN( trim(dataFileName), NF90_NOWRITE, ncId )
+     IF (ierr < 0) THEN
+        WRITE(*,*) 'Error while opening ', trim(dataFileName)
+        call MPI_Abort(MPI_COMM_WORLD, 2, IERR)
+     ENDIF
+
+     ierr = nf90_inq_varid( ncId, trim(gemMachFieldName), variableId )
+     ierr = nf90_inquire_variable( ncId, variableId, dimIds = dimIds )
+     ierr = nf90_inquire_dimension( ncID, dimIds(1), len = grid_ni )
+     ierr = nf90_inquire_dimension( ncID, dimIds(2), len = grid_nj )
+     ierr = nf90_inquire_dimension( ncID, dimIds(3), len = grid_nt )
+
+     limI_lcl = limI
+     limJ_lcl = limJ
+     start_ni = 1
+     start_nj = 1
+     
+     if (limI_lcl .ne. -1) then
+        if (limJ_lcl .eq. -1) then
+           limJ_lcl = limI_lcl
+        endif
+        
+        if (ctrLat .ne. -999.0) then
+           ierr = nf90_inquire(ncId, nVariables=nVar)
+           latVarId = -1
+           lonVarId = -1
+           do i = 1,nVar
+              ierr = nf90_get_att(ncId, i, 'standard_name', std_name)
+345           format('Checking var ', i, '''', a, '''')
+346           format('Found ', a, ', checking if ', i, ' = ', i, ' and ', i, ' = ', i)
+347           format('dimIds = ', i, ', ', i, ', ', i, ';   dimIds2 = ', i, ', ', i)
+              write(*,345) i, trim(std_name)
+              if (trim(std_name) .eq. 'latitude') then
+                 ierr = nf90_inquire_variable( ncId, i, dimIds = dimIds2)
+                 ! write(*,*) ' checking dimIds. iErr = ', ierr
+                 ! write(*,347) dimIds(1:3), dimIds2(1:2)
+                 ierr = nf90_inquire_dimension( ncID, dimIds2(1), len = ni )
+                 ! write(*,*) ' checking dimIds2(1). iErr = ', ierr
+                 ierr = nf90_inquire_dimension( ncID, dimIds2(2), len = nj )
+                 ! write(*,*) ' checking dimIds2(2). iErr = ', ierr
+                 write(*,346) 'lat', ni, grid_ni, nj, grid_nj
+                 if (ni .eq. grid_ni .and. nj .eq. grid_nj) then
+                    latVarId = i
+                    lat_ni = ni
+                    lat_nj = nj
+                 endif
+
+              elseif (trim(std_name) .eq. 'longitude') then
+                 ierr = nf90_inquire_variable( ncId, i, dimIds = dimIds2)
+                 ! write(*,347) dimIds(1:3), dimIds2(1:2)
+                 ierr = nf90_inquire_dimension( ncID, dimIds2(1), len = ni )
+                 ierr = nf90_inquire_dimension( ncID, dimIds2(2), len = nj )
+                 write(*,346) 'lon', ni, grid_ni, nj, grid_nj
+                 if (ni .eq. grid_ni .and. nj .eq. grid_nj) then
+                    lonVarId = i
+                    lon_ni = ni
+                    lon_nj = nj
+                 endif
+              endif
+           enddo
+           if (latVarId .eq. -1 .or. lonVarId .eq. -1) then
+              write(*,*) 'Error: could not find rotated grid lat and lon'
+              error stop
+           endif
+           ! lat_ni and lon_ni, and lat_nj and lon_nj should
+           ! match each other but I think it's more clear to have
+           ! them as separate variables
+           allocate(lat(lat_ni, lat_nj))
+           allocate(lon(lon_ni, lon_nj))
+           allocate(delta(lat_ni, lat_nj))
+
+           ierr = nf90_get_var(ncId, latVarId, lat)
+           ierr = nf90_get_var(ncId, lonVarId, lon)
+
+           do i = 1,lat_ni
+              do j = 1,lat_nj
+                 delta(i,j) = sqrt( (lat(i,j) - ctrLat)**2 &
+                      + (mod(lon(i,j) - ctrLon + 180.0, 360.0) - 180.0)**2 )
+              end do
+           end do
+           m = minloc(delta)
+348        format('Found min location ', i, ', ', i ' / ', f8.2, ', ', f8.2)
+           write(*,348) m(1), m(2), lat(m(1), m(2)), lon(m(1), m(2))
+           start_ni = m(1) - limI_lcl / 2
+           start_nj = m(2) - limJ_lcl / 2
+
+           deallocate(lat)
+           deallocate(lon)
+           deallocate(delta)
+           
+        endif
+
+        grid_ni = limI_lcl
+        grid_nj = limJ_lcl
+     end if
+
+
+     ierr = nf90_close( ncId )
+
+  end subroutine get_domain
+
     
     
   subroutine d2j(dat,julian,ierr)

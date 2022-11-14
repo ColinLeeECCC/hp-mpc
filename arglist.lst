@@ -1,9 +1,13 @@
-/space/hall5/sitestore/eccc/aq/r1/pic001/joana/out_compressed_netcdf/
-2013 08 01
-2014 07 31
-0
-96
+/fs/site5/eccc/aq/r1/cle001/model_outputs/nc4_comp_run1/
+00
+420
+2017 08 01
+2018 10 31
+2
+-1
 N2
 NO2
-/space/hall5/sitestore/eccc/aq/r1/cle001/src/hierarchical-clustering/output/
+/space/hall5/sitestore/eccc/aq/r1/cle001/src/hierarchical-clustering-dev/output/
 F
+50000
+T

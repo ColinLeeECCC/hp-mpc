@@ -43,9 +43,11 @@ if __name__ == "__main__":
 
     args = parser.parse_args()
 
+    start_x = 0
+    start_y = 0
     if args.start is not None:
-        start_x = int(args.start.split(',')[0])
-        start_y = int(args.start.split(',')[1])
+        start_x = int(args.start.split(',')[1])
+        start_y = int(args.start.split(',')[0])
 
     if (args.threshold == 9999.999 and args.num_clusters == -1) or \
        (args.threshold != 9999.999 and args.num_clusters != -1):
@@ -171,6 +173,13 @@ if __name__ == "__main__":
             "lat":  (('rlat', 'rlon'), geodata.lat_1.data[start_x:(start_x+dims[0]), start_y:(start_y+dims[1])]),
             "rlon": geodata.rlon1.data[start_y:(start_y+dims[1])],
             "lon":  (('rlat', 'rlon'), geodata.lon_1.data[start_x:(start_x+dims[0]), start_y:(start_y+dims[1])])
+                 }
+    elif 'rlat' in geodata.dims.keys():
+        coords={
+            "rlat": geodata.rlat.data[start_x:(start_x+dims[0])],
+            "lat":  (('rlat', 'rlon'), geodata.lat.data[start_x:(start_x+dims[0]), start_y:(start_y+dims[1])]),
+            "rlon": geodata.rlon.data[start_y:(start_y+dims[1])],
+            "lon":  (('rlat', 'rlon'), geodata.lon.data[start_x:(start_x+dims[0]), start_y:(start_y+dims[1])])
                  }
     elif 'lat' in geodata.dims.keys():
         # Colin's test netcdf files
