@@ -6,6 +6,7 @@ from matplotlib.offsetbox import AnchoredText
 from matplotlib import cm
 from matplotlib.colors import ListedColormap, LinearSegmentedColormap
 import numpy as np
+from math import ceil
 
 import xarray as xr
 
@@ -42,9 +43,52 @@ def main(filename='map_cluster_2017080100_2018103100_N2_02_0.80.nc4', outfile=No
     ax.add_feature(cfeature.RIVERS)
     ax.add_feature(states_provinces)
 
+    clusters = ds.clusters.data
+    while True:
+        # we're using a repeated, random, 20-colour colourmap, which means
+        # if we have any adjacent (in lat-lon space) clusters with IDs that
+        # differ by a multiple of 20, they get the same colour and look like
+        # one cluster. So let's try to detect that situation.
+        not_same_idx = np.logical_not(
+            np.logical_and(
+                np.equal( clusters[:-1,:-1], clusters[:-1,1:] ),
+                np.equal( clusters[1:,:-1],  clusters[1:,1:] )
+            )
+        )
+        colidx = np.remainder( clusters, 20 )
+        same_col = np.logical_and(
+            np.equal( colidx[:-1,:-1],  colidx[:-1,1:] ),
+            np.equal( colidx[1:,:-1], colidx[1:,1:] )
+        )
+
+        numClust=int(np.max(ds.clusters))
+
+        tmp = clusters[1:,1:]
+        print('tmp.shape: ', tmp.shape)
+        print('not_same_idx.shape: ', not_same_idx.shape)
+        print('same_col.shape: ', same_col.shape)
+        blenders= np.unique(tmp[np.logical_and(not_same_idx, same_col)])
+        if len(blenders) == 0:
+            break
+        print('These colours clash: ',blenders)
+        for i,b in enumerate(blenders):
+            if i % 2 == 1:
+                continue
+            bnew = np.floor(np.random.rand(1) * numClust)
+            while (bnew % 20) == (b % 20):
+                bnew = np.random.rand(1) * numClust
+            print('Swapping {} and {}'.format(b, bnew))
+            tmp = clusters
+            tmp[np.equal(tmp, b)] = numClust+1
+            tmp[np.equal(tmp, bnew)] = b
+            tmp[np.equal(tmp, numClust+1)] = bnew
+            clusters=tmp
+    
     # plt.contourf(ds.lon, ds.lat, ds.clusters, transform=ccrs.PlateCarree())
-    tmpcm = ListedColormap(np.tile(cm.get_cmap('tab20').colors, (5,1)))
-    pcm = ax.pcolormesh(ds.lon, ds.lat, ds.clusters,
+    mult = ceil(float(numClust) / 20.0)
+    print('numClust = {:}, mult = {:}'.format(numClust, mult))
+    tmpcm = ListedColormap(np.tile(cm.get_cmap('tab20').colors, (mult,1))[0:numClust,:])
+    pcm = ax.pcolormesh(ds.lon, ds.lat, clusters,
                         transform=ccrs.PlateCarree(),
                         cmap=tmpcm)
     
