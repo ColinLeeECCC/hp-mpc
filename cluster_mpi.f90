@@ -41,7 +41,8 @@ program cluster
 
   ! data file variables
   integer                    :: forecastHour, startTimestep
-  character(256)             :: dataFileName, acFileName
+  character(256)             :: dataFileName, acFileName, checkPtFilename
+  character(256)             :: tmpFileName
   integer                    :: ncId, variableId
   integer, dimension(NF90_MAX_VAR_DIMS) &
        :: dimIds
@@ -56,6 +57,8 @@ program cluster
   real*8, allocatable, dimension(:) &
                              :: tracer_sum, tracer_sqsum, &
                                 tracer_xysum(:,:)
+  real*8, allocatable, dimension(:) &
+                             :: deltasq_sum(:,:)
   ! integer, allocatable, dimension(:) &
   !                            :: tracer_n, tracer_xn
   real*8                     :: tracer_tmp, tracer_tmp2
@@ -116,9 +119,10 @@ program cluster
   integer                    :: K1Rank, K2Rank
 
   ! Linkage variables
-  integer                    :: linkage
+  integer                    :: metric, linkage
   real*8                     :: D_IJ, alpha1, alpha2
   real*8                     :: beta, gamma
+  logical                    :: calc_one_minus_r, calc_eu_dist
   
 
   ! MPI timing variables
@@ -189,12 +193,14 @@ program cluster
         READ(fu_in, '(i)') startTimestep
         READ(fu_in, '(i4,2(1x,i2.2))') start_year, start_mon, start_day
         READ(fu_in, '(i4,2(1x,i2.2))')   end_year,   end_mon,   end_day
+        READ(fu_in, *) metric
         READ(fu_in, *) linkage
         READ(fu_in, '(a)') useFractionOfRegion
         READ(fu_in, '(a8)') gemMachFieldName
         READ(fu_in, '(a8)') ncFieldName
      else
         READ(fu_in, '(a256)') acFileName ! data where compressed netcdf GEM-MACH data is stored
+        READ(fu_in, *) metric
         READ(fu_in, *) linkage
         READ(fu_in, *) useFractionOfRegion
         READ(fu_in, '(a256)') ncFieldName
@@ -220,6 +226,13 @@ program cluster
      endif
 
      close(fu_in)
+     if (metric .lt. 0 .or. metric .gt. 2) then
+        WRITE(*,*) 'Metric must be between 0 and 2, inclusive, not ', metric
+        call MPI_Abort(MPI_COMM_WORLD, 7, IERR)
+     endif
+     calc_one_minus_r = metric .eq. 0 .or. metric .eq. 2
+     calc_eu_dist     = metric .eq. 1 .or. metric .eq. 2
+     
      if (linkage .lt. 0 .or. linkage .gt. 6) THEN
         WRITE(*,*) 'Linkage must be between 0 and 6, inclusive, not ', linkage
         call MPI_Abort(MPI_COMM_WORLD, 7, IERR)
@@ -249,6 +262,7 @@ program cluster
   call MPI_BCast(end_year,      1, MPI_INTEGER, ROOT, MPI_COMM_WORLD, ierr)
   call MPI_BCast(end_mon,       1, MPI_INTEGER, ROOT, MPI_COMM_WORLD, ierr)
   call MPI_BCast(end_day,       1, MPI_INTEGER, ROOT, MPI_COMM_WORLD, ierr)
+  call MPI_BCast(metric,        1, MPI_INTEGER, ROOT, MPI_COMM_WORLD, ierr)
   call MPI_BCast(linkage,       1, MPI_INTEGER, ROOT, MPI_COMM_WORLD, ierr)
   call MPI_BCast(checkptFreq,   1, MPI_INTEGER, ROOT, MPI_COMM_WORLD, ierr)
   call MPI_BCast(useFractionOfRegion,                     &
@@ -260,6 +274,10 @@ program cluster
   call MPI_BCast(outdir, len(outdir), MPI_CHARACTER, ROOT, MPI_COMM_WORLD, ierr)
   call MPI_BCast(only_save_dissMat, 1, MPI_LOGICAL, ROOT, MPI_COMM_WORLD, ierr)
   call MPI_BCast(exit_after_checkpt, 1, MPI_LOGICAL, ROOT, MPI_COMM_WORLD, ierr)
+
+  ! Compute local variables from brodcast data
+  calc_one_minus_r = metric .eq. 0 .or. metric .eq. 2
+  calc_eu_dist     = metric .eq. 1 .or. metric .eq. 2
 
   limI = -1
   limJ = -1
@@ -399,10 +417,22 @@ program cluster
 
   startStep = 1
   ! See if we are loading from a checkpoint file
-  dataFileName = trim(outDir) // '/checkpoint.bin'
-  inquire(file=dataFileName, exist=fileExists)
+196 FORMAT(a, i7.7,'_',i2.2, '_checkpoint.bin')
+197 FORMAT(a,i4.4,i2.2,i2.2, '_', i4.4,i2.2,i2.2,'_', i2.2, '_', &
+         a, '_', i2.2, '_', i4.4, 'x', i4.4, '_checkpoint.bin')
+
+  if (is_aircraft_data) then
+     WRITE(checkptFileName,196) trim(outDir), grid_ni, linkage
+  else
+     WRITE(checkptFileName,197) trim(outDir), start_year, start_mon,     &
+          start_day, end_year, end_mon, end_day, forecastHour,  &
+          trim(gemMachFieldName), linkage, grid_ni, grid_nj
+  end if
+  
+  inquire(file=checkptFileName, exist=fileExists)
   if (fileExists) then
-     call load_cluster_checkpoint(numPoints, numClustersThisNode, myRank, &
+     call load_cluster_checkpoint(checkPtFileName, numPoints,             &
+                                  numClustersThisNode, myRank,            &
                                   numProcs, myClusters, clusterRanks,     &
                                   clusterDissimilarities, clusterPairs,   &
                                   live, PQueue, startStep, NODES, outdir)
@@ -494,22 +524,32 @@ program cluster
         
      ENDIF
 
-
+     
      ALLOCATE(BUFFER(GRID_NI, GRID_NJ))
 
-     IF ( tileDissMat ) THEN
-        ALLOCATE(  TRACER_SUM( dissSizeI + dissSizeJ ))
-        ALLOCATE(TRACER_SQSUM( dissSizeI + dissSizeJ ))
-        ALLOCATE(TRACER_XYSUM( dissSizeI,  dissSizeJ ))
-     ELSE
-        ALLOCATE(  TRACER_SUM( numPoints ))
-        ALLOCATE(TRACER_SQSUM( numPoints ))
-        ALLOCATE(TRACER_XYSUM( numClustersThisNode, numPoints ))
-     ENDIF
+     if (calc_one_minus_r) then
+        IF ( tileDissMat ) THEN
+           ALLOCATE(  TRACER_SUM( dissSizeI + dissSizeJ ))
+           ALLOCATE(TRACER_SQSUM( dissSizeI + dissSizeJ ))
+           ALLOCATE(TRACER_XYSUM( dissSizeI,  dissSizeJ ))
+        ELSE
+           ALLOCATE(  TRACER_SUM( numPoints ))
+           ALLOCATE(TRACER_SQSUM( numPoints ))
+           ALLOCATE(TRACER_XYSUM( numClustersThisNode, numPoints ))
+        ENDIF
+        TRACER_SUM = 0d0
+        TRACER_SQSUM = 0d0
+        TRACER_XYSUM = 0d0
+     endif
 
-     TRACER_SUM = 0d0
-     TRACER_SQSUM = 0d0
-     TRACER_XYSUM = 0d0
+     if (calc_eu_dist) then
+        IF ( tileDissMat ) THEN
+           ALLOCATE(DELTASQ_SUM( dissSizeI,  dissSizeJ ))
+        ELSE
+           ALLOCATE(DELTASQ_SUM( numClustersThisNode, numPoints ))
+        ENDIF
+        DELTASQ_SUM = 0d0
+     endif
 
      if (is_aircraft_data) then
         dataFileName = acFileName
@@ -554,72 +594,119 @@ program cluster
 
         DO IHR = 1, numSpectral
            !write(*,*) 'IHR = ', IHR
-
+           
            IF ( tileDissMat ) THEN
-              !$OMP PARALLEL DO                       &
-              !$OMP DEFAULT( SHARED )                 &
-              !$OMP PRIVATE( II, I, J, GRIDI, GRIDJ ) &
-              !$OMP PRIVATE( TRACER_TMP, GRIDI2 )     &
-              !$OMP PRIVATE( GRIDJ2, TRACER_TMP2 )
-              DO II = 1,dissSizeI + dissSizeJ
-                 IF ( II .le. dissSizeI ) THEN
-                    I = II - 1 + dissStartI
-                 ELSE
-                    I = II - 1 - dissSizeI + dissStartJ
-                 ENDIF
-                 TRACER_TMP = BUFFER( I, IHR )
+              if (calc_one_minus_r) then
+                 !$OMP PARALLEL DO                       &
+                 !$OMP DEFAULT( SHARED )                 &
+                 !$OMP PRIVATE( II, I, J, GRIDI, GRIDJ ) &
+                 !$OMP PRIVATE( TRACER_TMP, GRIDI2 )     &
+                 !$OMP PRIVATE( GRIDJ2, TRACER_TMP2 )
+                 DO II = 1,dissSizeI + dissSizeJ
+                    IF ( II .le. dissSizeI ) THEN
+                       I = II - 1 + dissStartI
+                    ELSE
+                       I = II - 1 - dissSizeI + dissStartJ
+                    ENDIF
+                    TRACER_TMP = BUFFER( I, IHR )
 
-                 TRACER_SUM(II)   = TRACER_SUM(II)   + TRACER_TMP
-                 TRACER_SQSUM(II) = TRACER_SQSUM(II) + TRACER_TMP * TRACER_TMP
+                    TRACER_SUM(II)   = TRACER_SUM(II)   + TRACER_TMP
+                    TRACER_SQSUM(II) = TRACER_SQSUM(II) + TRACER_TMP * TRACER_TMP
 
-                 IF ( II .le. dissSizeI ) THEN
-                    DO JJ = 1,dissSizeJ
-                       J = JJ - 1 + dissStartJ
+                    IF ( II .le. dissSizeI ) THEN
+                       DO JJ = 1,dissSizeJ
+                          J = JJ - 1 + dissStartJ
+                          TRACER_TMP2 = BUFFER( J, IHR )
+
+                          TRACER_XYSUM( II, JJ ) = TRACER_XYSUM( II, JJ ) + &
+                               TRACER_TMP * TRACER_TMP2
+                       ENDDO
+                    ENDIF
+                 ENDDO
+                 !$OMP END PARALLEL DO
+              endif
+              if (calc_eu_dist) then
+                 !$OMP PARALLEL DO                       &
+                 !$OMP DEFAULT( SHARED )                 &
+                 !$OMP PRIVATE( II, I, J, GRIDI, GRIDJ ) &
+                 !$OMP PRIVATE( TRACER_TMP, GRIDI2 )     &
+                 !$OMP PRIVATE( GRIDJ2, TRACER_TMP2 )
+                 DO II = 1,dissSizeI + dissSizeJ
+                    IF ( II .le. dissSizeI ) THEN
+                       I = II - 1 + dissStartI
+                    ELSE
+                       I = II - 1 - dissSizeI + dissStartJ
+                    ENDIF
+                    TRACER_TMP = BUFFER( I, IHR )
+
+                    IF ( II .le. dissSizeI ) THEN
+                       DO JJ = 1,dissSizeJ
+                          J = JJ - 1 + dissStartJ
+                          TRACER_TMP2 = BUFFER( J, IHR )
+
+                          DELTASQ_SUM( II, JJ ) = DELTASQ_SUM( II, JJ ) + &
+                               ( TRACER_TMP - TRACER_TMP2 ) ** 2
+                       ENDDO
+                    ENDIF
+                 ENDDO
+              end if
+           ELSE
+              if (calc_one_minus_r) then
+                 !$OMP PARALLEL DO                       &
+                 !$OMP DEFAULT( SHARED )                 &
+                 !$OMP PRIVATE( II, I, J, GRIDI, GRIDJ ) &
+                 !$OMP PRIVATE( TRACER_TMP, GRIDI2 )     &
+                 !$OMP PRIVATE( GRIDJ2, TRACER_TMP2 )
+                 DO II = 1,numClustersThisNode
+                    I = myClusters(II)
+                    ! GRIDI = (I - 1) / GRID_NJ + 1
+                    ! GRIDJ = (I - 1) - (GRIDI - 1) * GRID_NJ + 1
+                    TRACER_TMP = BUFFER( I, IHR )
+
+                    DO J = 1,numPoints
+                       ! GRIDI2 = (J - 1) / GRID_NJ + 1
+                       ! GRIDJ2 = (J - 1) - ( GRIDI2 - 1 ) * GRID_NJ + 1
                        TRACER_TMP2 = BUFFER( J, IHR )
 
-                       TRACER_XYSUM( II, JJ ) = TRACER_XYSUM( II, JJ ) + &
+                       TRACER_XYSUM( II, J ) = TRACER_XYSUM( II, J ) + &
                             TRACER_TMP * TRACER_TMP2
                     ENDDO
-                 ENDIF
-              ENDDO
-              !$OMP END PARALLEL DO
-
-           ELSE
-              !$OMP PARALLEL DO                       &
-              !$OMP DEFAULT( SHARED )                 &
-              !$OMP PRIVATE( II, I, J, GRIDI, GRIDJ ) &
-              !$OMP PRIVATE( TRACER_TMP, GRIDI2 )     &
-              !$OMP PRIVATE( GRIDJ2, TRACER_TMP2 )
-              DO II = 1,numClustersThisNode
-                 I = myClusters(II)
-                 ! GRIDI = (I - 1) / GRID_NJ + 1
-                 ! GRIDJ = (I - 1) - (GRIDI - 1) * GRID_NJ + 1
-                 TRACER_TMP = BUFFER( I, IHR )
-
-                 DO J = 1,numPoints
-                    ! GRIDI2 = (J - 1) / GRID_NJ + 1
-                    ! GRIDJ2 = (J - 1) - ( GRIDI2 - 1 ) * GRID_NJ + 1
-                    TRACER_TMP2 = BUFFER( J, IHR )
-
-                    TRACER_XYSUM( II, J ) = TRACER_XYSUM( II, J ) + &
-                         TRACER_TMP * TRACER_TMP2
                  ENDDO
-              ENDDO
-              !$OMP END PARALLEL DO
+                 !$OMP END PARALLEL DO
 
-              !$OMP PARALLEL DO                       &
-              !$OMP DEFAULT( SHARED )                 &
-              !$OMP PRIVATE( I, GRIDI, GRIDJ )        &
-              !$OMP PRIVATE( TRACER_TMP )  
-              DO I = 1,numPoints
-                 ! GRIDI = (I - 1) / GRID_NJ + 1
-                 ! GRIDJ = (I - 1) - (GRIDI - 1) * GRID_NJ + 1
-                 TRACER_TMP = BUFFER( I, IHR )
+                 !$OMP PARALLEL DO                       &
+                 !$OMP DEFAULT( SHARED )                 &
+                 !$OMP PRIVATE( I, GRIDI, GRIDJ )        &
+                 !$OMP PRIVATE( TRACER_TMP )  
+                 DO I = 1,numPoints
+                    ! GRIDI = (I - 1) / GRID_NJ + 1
+                    ! GRIDJ = (I - 1) - (GRIDI - 1) * GRID_NJ + 1
+                    TRACER_TMP = BUFFER( I, IHR )
 
-                 TRACER_SUM( I )   = TRACER_SUM( I )   + TRACER_TMP
-                 TRACER_SQSUM( I ) = TRACER_SQSUM( I ) + TRACER_TMP * TRACER_TMP
-              ENDDO
-              !$OMP END PARALLEL DO
+                    TRACER_SUM( I )   = TRACER_SUM( I )   + TRACER_TMP
+                    TRACER_SQSUM( I ) = TRACER_SQSUM( I ) + TRACER_TMP * TRACER_TMP
+                 ENDDO
+                 !$OMP END PARALLEL DO
+              endif
+              if (calc_eu_dist) then
+                 !$OMP PARALLEL DO                       &
+                 !$OMP DEFAULT( SHARED )                 &
+                 !$OMP PRIVATE( II, I, J, GRIDI, GRIDJ ) &
+                 !$OMP PRIVATE( TRACER_TMP, GRIDI2 )     &
+                 !$OMP PRIVATE( GRIDJ2, TRACER_TMP2 )
+                 DO II = 1,numClustersThisNode
+                    I = myClusters(II)
+                    TRACER_TMP = BUFFER( I, IHR )
+
+                    DO J = 1,numPoints
+                       TRACER_TMP2 = BUFFER( J, IHR )
+
+                       DELTASQ_SUM( II, J ) = DELTASQ_SUM( II, J ) + &
+                            (TRACER_TMP - TRACER_TMP2) ** 2
+                    ENDDO
+                 ENDDO
+                 !$OMP END PARALLEL DO
+              endif
            ENDIF ! ( tileDissMat )
         ENDDO
      else
@@ -662,84 +749,140 @@ program cluster
 
            HRS_SINCE_START = 24 * ( IDAY - 1 ) + IHR - 1
            IF ( tileDissMat ) THEN
-              !$OMP PARALLEL DO                       &
-              !$OMP DEFAULT( SHARED )                 &
-              !$OMP PRIVATE( II, I, J, GRIDI, GRIDJ ) &
-              !$OMP PRIVATE( TRACER_TMP, GRIDI2 )     &
-              !$OMP PRIVATE( GRIDJ2, TRACER_TMP2 )
-              DO II = 1,dissSizeI + dissSizeJ
-                 IF ( II .le. dissSizeI ) THEN
-                    I = II - 1 + dissStartI
-                 ELSE
-                    I = II - 1 - dissSizeI + dissStartJ
-                 ENDIF
-                 GRIDJ = (I - 1) / GRID_NI + 1
-                 GRIDI = (I - 1) - (GRIDJ - 1) * GRID_NI + 1
-                 TRACER_TMP = BUFFER( GRIDI, GRIDJ )
-                 if (tracer_tmp == 0d0) then
-109                 format('(', i, ', ', i, ') = 0d0!')
-                    write(*,109) GRIDI, GRIDJ
-                 endif
+              if (calc_one_minus_r) then
+                 !$OMP PARALLEL DO                       &
+                 !$OMP DEFAULT( SHARED )                 &
+                 !$OMP PRIVATE( II, I, J, GRIDI, GRIDJ ) &
+                 !$OMP PRIVATE( TRACER_TMP, GRIDI2 )     &
+                 !$OMP PRIVATE( GRIDJ2, TRACER_TMP2 )
+                 DO II = 1,dissSizeI + dissSizeJ
+                    IF ( II .le. dissSizeI ) THEN
+                       I = II - 1 + dissStartI
+                    ELSE
+                       I = II - 1 - dissSizeI + dissStartJ
+                    ENDIF
+                    GRIDJ = (I - 1) / GRID_NI + 1
+                    GRIDI = (I - 1) - (GRIDJ - 1) * GRID_NI + 1
+                    TRACER_TMP = BUFFER( GRIDI, GRIDJ )
+                    if (tracer_tmp == 0d0) then
+109                    format('(', i, ', ', i, ') = 0d0!')
+                       write(*,109) GRIDI, GRIDJ
+                    endif
 
-                 TRACER_SUM(II)   = TRACER_SUM(II)   + TRACER_TMP
-                 TRACER_SQSUM(II) = TRACER_SQSUM(II) + TRACER_TMP * TRACER_TMP
+                    TRACER_SUM(II)   = TRACER_SUM(II)   + TRACER_TMP
+                    TRACER_SQSUM(II) = TRACER_SQSUM(II) + TRACER_TMP * TRACER_TMP
 
-                 IF ( II .le. dissSizeI ) THEN
-                    DO JJ = 1,dissSizeJ
-                       J = JJ - 1 + dissStartJ
+                    IF ( II .le. dissSizeI ) THEN
+                       DO JJ = 1,dissSizeJ
+                          J = JJ - 1 + dissStartJ
+                          GRIDJ2 = (J - 1) / GRID_NI + 1
+                          GRIDI2 = (J - 1) - ( GRIDJ2 - 1 ) * GRID_NI + 1
+                          TRACER_TMP2 = BUFFER( GRIDI2, GRIDJ2 )
+
+                          TRACER_XYSUM( II, JJ ) = TRACER_XYSUM( II, JJ ) + &
+                               TRACER_TMP * TRACER_TMP2
+                       ENDDO
+                    ENDIF
+                 ENDDO
+                 !$OMP END PARALLEL DO
+              end if
+              if (calc_eu_dist) then
+                 !$OMP PARALLEL DO                       &
+                 !$OMP DEFAULT( SHARED )                 &
+                 !$OMP PRIVATE( II, I, J, GRIDI, GRIDJ ) &
+                 !$OMP PRIVATE( TRACER_TMP, GRIDI2 )     &
+                 !$OMP PRIVATE( GRIDJ2, TRACER_TMP2 )
+                 DO II = 1,dissSizeI + dissSizeJ
+                    IF ( II .le. dissSizeI ) THEN
+                       I = II - 1 + dissStartI
+                    ELSE
+                       I = II - 1 - dissSizeI + dissStartJ
+                    ENDIF
+                    GRIDJ = (I - 1) / GRID_NI + 1
+                    GRIDI = (I - 1) - (GRIDJ - 1) * GRID_NI + 1
+                    TRACER_TMP = BUFFER( GRIDI, GRIDJ )
+
+                    IF ( II .le. dissSizeI ) THEN
+                       DO JJ = 1,dissSizeJ
+                          J = JJ - 1 + dissStartJ
+                          GRIDJ2 = (J - 1) / GRID_NI + 1
+                          GRIDI2 = (J - 1) - ( GRIDJ2 - 1 ) * GRID_NI + 1
+                          TRACER_TMP2 = BUFFER( GRIDI2, GRIDJ2 )
+
+                          DELTASQ_SUM( II, JJ ) = DELTASQ_SUM( II, JJ ) + &
+                               ( TRACER_TMP - TRACER_TMP2 ) ** 2
+                       ENDDO
+                    ENDIF
+                 ENDDO
+                 !$OMP END PARALLEL DO
+              end if
+           ELSE
+              if (calc_one_minus_r) then
+                 !$OMP PARALLEL DO                       &
+                 !$OMP DEFAULT( SHARED )                 &
+                 !$OMP PRIVATE( II, I, J, GRIDI, GRIDJ ) &
+                 !$OMP PRIVATE( TRACER_TMP, GRIDI2 )     &
+                 !$OMP PRIVATE( GRIDJ2, TRACER_TMP2 )
+                 DO II = 1,numClustersThisNode
+                    I = myClusters(II)
+                    ! GRIDI = (I - 1) / GRID_NJ + 1
+                    ! GRIDJ = (I - 1) - (GRIDI - 1) * GRID_NJ + 1
+                    GRIDJ = (I - 1) / GRID_NI + 1
+                    GRIDI = (I - 1) - (GRIDJ - 1) * GRID_NI + 1
+                    TRACER_TMP = BUFFER( GRIDI, GRIDJ )
+
+                    DO J = 1,numPoints
+                       ! GRIDI2 = (J - 1) / GRID_NJ + 1
+                       ! GRIDJ2 = (J - 1) - ( GRIDI2 - 1 ) * GRID_NJ + 1
                        GRIDJ2 = (J - 1) / GRID_NI + 1
                        GRIDI2 = (J - 1) - ( GRIDJ2 - 1 ) * GRID_NI + 1
                        TRACER_TMP2 = BUFFER( GRIDI2, GRIDJ2 )
 
-                       TRACER_XYSUM( II, JJ ) = TRACER_XYSUM( II, JJ ) + &
+                       TRACER_XYSUM( II, J ) = TRACER_XYSUM( II, J ) + &
                             TRACER_TMP * TRACER_TMP2
                     ENDDO
-                 ENDIF
-              ENDDO
-              !$OMP END PARALLEL DO
-
-           ELSE
-              !$OMP PARALLEL DO                       &
-              !$OMP DEFAULT( SHARED )                 &
-              !$OMP PRIVATE( II, I, J, GRIDI, GRIDJ ) &
-              !$OMP PRIVATE( TRACER_TMP, GRIDI2 )     &
-              !$OMP PRIVATE( GRIDJ2, TRACER_TMP2 )
-              DO II = 1,numClustersThisNode
-                 I = myClusters(II)
-                 ! GRIDI = (I - 1) / GRID_NJ + 1
-                 ! GRIDJ = (I - 1) - (GRIDI - 1) * GRID_NJ + 1
-                 GRIDJ = (I - 1) / GRID_NI + 1
-                 GRIDI = (I - 1) - (GRIDJ - 1) * GRID_NI + 1
-                 TRACER_TMP = BUFFER( GRIDI, GRIDJ )
-
-                 DO J = 1,numPoints
-                    ! GRIDI2 = (J - 1) / GRID_NJ + 1
-                    ! GRIDJ2 = (J - 1) - ( GRIDI2 - 1 ) * GRID_NJ + 1
-                    GRIDJ2 = (J - 1) / GRID_NI + 1
-                    GRIDI2 = (J - 1) - ( GRIDJ2 - 1 ) * GRID_NI + 1
-                    TRACER_TMP2 = BUFFER( GRIDI2, GRIDJ2 )
-
-                    TRACER_XYSUM( II, J ) = TRACER_XYSUM( II, J ) + &
-                         TRACER_TMP * TRACER_TMP2
                  ENDDO
-              ENDDO
-              !$OMP END PARALLEL DO
+                 !$OMP END PARALLEL DO
 
-              !$OMP PARALLEL DO                       &
-              !$OMP DEFAULT( SHARED )                 &
-              !$OMP PRIVATE( I, GRIDI, GRIDJ )        &
-              !$OMP PRIVATE( TRACER_TMP )  
-              DO I = 1,numPoints
-                 ! GRIDI = (I - 1) / GRID_NJ + 1
-                 ! GRIDJ = (I - 1) - (GRIDI - 1) * GRID_NJ + 1
-                 GRIDJ = (I - 1) / GRID_NI + 1
-                 GRIDI = (I - 1) - (GRIDJ - 1) * GRID_NI + 1
-                 TRACER_TMP = BUFFER( GRIDI, GRIDJ )
+                 !$OMP PARALLEL DO                       &
+                 !$OMP DEFAULT( SHARED )                 &
+                 !$OMP PRIVATE( I, GRIDI, GRIDJ )        &
+                 !$OMP PRIVATE( TRACER_TMP )  
+                 DO I = 1,numPoints
+                    ! GRIDI = (I - 1) / GRID_NJ + 1
+                    ! GRIDJ = (I - 1) - (GRIDI - 1) * GRID_NJ + 1
+                    GRIDJ = (I - 1) / GRID_NI + 1
+                    GRIDI = (I - 1) - (GRIDJ - 1) * GRID_NI + 1
+                    TRACER_TMP = BUFFER( GRIDI, GRIDJ )
 
-                 TRACER_SUM( I )   = TRACER_SUM( I )   + TRACER_TMP
-                 TRACER_SQSUM( I ) = TRACER_SQSUM( I ) + TRACER_TMP * TRACER_TMP
-              ENDDO
-              !$OMP END PARALLEL DO
+                    TRACER_SUM( I )   = TRACER_SUM( I )   + TRACER_TMP
+                    TRACER_SQSUM( I ) = TRACER_SQSUM( I ) + TRACER_TMP * TRACER_TMP
+                 ENDDO
+                 !$OMP END PARALLEL DO
+              end if
+              if (calc_eu_dist) then
+                 !$OMP PARALLEL DO                       &
+                 !$OMP DEFAULT( SHARED )                 &
+                 !$OMP PRIVATE( II, I, J, GRIDI, GRIDJ ) &
+                 !$OMP PRIVATE( TRACER_TMP, GRIDI2 )     &
+                 !$OMP PRIVATE( GRIDJ2, TRACER_TMP2 )
+                 DO II = 1,numClustersThisNode
+                    I = myClusters(II)
+                    GRIDJ = (I - 1) / GRID_NI + 1
+                    GRIDI = (I - 1) - (GRIDJ - 1) * GRID_NI + 1
+                    TRACER_TMP = BUFFER( GRIDI, GRIDJ )
+
+                    DO J = 1,numPoints
+                       GRIDJ2 = (J - 1) / GRID_NI + 1
+                       GRIDI2 = (J - 1) - ( GRIDJ2 - 1 ) * GRID_NI + 1
+                       TRACER_TMP2 = BUFFER( GRIDI2, GRIDJ2 )
+
+                       DELTASQ_SUM( II, J ) = DELTASQ_SUM( II, J ) + &
+                            ( TRACER_TMP - TRACER_TMP2 ) ** 2
+                    ENDDO
+                 ENDDO
+                 !$OMP END PARALLEL DO
+              end if
            ENDIF ! ( tileDissMat )
         ENDDO
      ENDDO
@@ -767,38 +910,44 @@ program cluster
            DO JJ = 1, dissSizeJ
               J = JJ - 1 + dissStartJ
               IF ( J .eq. N ) CYCLE ! don't compute self-similarity
-              ! WRITE(*,*) '   ', I
-              ! compute the 1-R for this pair of clusters
-              SXY = tracer_xysum(II, JJ) * Nt - &
-                   tracer_sum(II) * tracer_sum(JJ + dissSizeI)
-              SXX = tracer_sqsum(JJ + dissSizeI) * Nt - &
-                   ( tracer_sum(JJ + dissSizeI) * tracer_sum(JJ + dissSizeI))
-              SYY = tracer_sqsum(II) * Nt - &
-                   ( tracer_sum(II) * tracer_sum(II) )
-              ! WRITE(*,*) '   ', SXX, ', ', SYY, ', ', SXY
-              IF ( SXX .eq. 0d0 .or. SYY .eq. 0d0 ) THEN
-                 R = -1d0
-                 if (.not. is_aircraft_data) then
-                    WRITE(*,*) 'Got bad statistics at ', N, '(', II, '), ', JJ, '(', J, ')'
-                    WRITE(*,*) 'Ex = ', tracer_sum(II), 'Ey = ', tracer_sum(JJ + dissSizeI)
-                    WRITE(*,*) 'Ex2 = ', tracer_sqsum(II), 'Ey2 = ', tracer_sqsum(JJ + dissSizeI)
-                    WRITE(*,*) 'SXY = ', SXY, 'SXX = ', SXX, 'SYY = ', SYY
-                 end if
-              ELSE
-                 R = SXY / SQRT( SXX * SYY )
-                 IF ( R < -1d0 .or. R > 1d0 ) THEN
-                    WRITE(*,*) 'Got weird R at ',II, '(', N, '),', JJ
-                    WRITE(*,*) ' R = ', R
-                    WRITE(*,*) 'Exy = ', tracer_xysum(II, JJ), ' Nt = ', Nt
-                    WRITE(*,*) 'Ex = ', tracer_sum(II), 'Ey = ', tracer_sum(JJ + dissSizeI)
-                    WRITE(*,*) 'Ex2 = ', tracer_sqsum(II), 'Ey2 = ', tracer_sqsum(JJ + dissSizeI)
-                    WRITE(*,*) 'SXY = ', SXY, 'SXX = ', SXX, 'SYY = ', SYY
+              if ( metric .eq. 0 .or. metric .eq. 2) then
+                 ! WRITE(*,*) '   ', I
+                 ! compute the 1-R for this pair of clusters
+                 SXY = tracer_xysum(II, JJ) * Nt - &
+                      tracer_sum(II) * tracer_sum(JJ + dissSizeI)
+                 SXX = tracer_sqsum(JJ + dissSizeI) * Nt - &
+                      ( tracer_sum(JJ + dissSizeI) * tracer_sum(JJ + dissSizeI))
+                 SYY = tracer_sqsum(II) * Nt - &
+                      ( tracer_sum(II) * tracer_sum(II) )
+                 ! WRITE(*,*) '   ', SXX, ', ', SYY, ', ', SXY
+                 IF ( SXX .eq. 0d0 .or. SYY .eq. 0d0 ) THEN
+                    R = -1d0
+                    if (.not. is_aircraft_data) then
+                       WRITE(*,*) 'Got bad statistics at ', N, '(', II, '), ', JJ, '(', J, ')'
+                       WRITE(*,*) 'Ex = ', tracer_sum(II), 'Ey = ', tracer_sum(JJ + dissSizeI)
+                       WRITE(*,*) 'Ex2 = ', tracer_sqsum(II), 'Ey2 = ', tracer_sqsum(JJ + dissSizeI)
+                       WRITE(*,*) 'SXY = ', SXY, 'SXX = ', SXX, 'SYY = ', SYY
+                    end if
+                 ELSE
+                    R = SXY / SQRT( SXX * SYY )
+                    IF ( R < -1d0 .or. R > 1d0 ) THEN
+                       WRITE(*,*) 'Got weird R at ',II, '(', N, '),', JJ
+                       WRITE(*,*) ' R = ', R
+                       WRITE(*,*) 'Exy = ', tracer_xysum(II, JJ), ' Nt = ', Nt
+                       WRITE(*,*) 'Ex = ', tracer_sum(II), 'Ey = ', tracer_sum(JJ + dissSizeI)
+                       WRITE(*,*) 'Ex2 = ', tracer_sqsum(II), 'Ey2 = ', tracer_sqsum(JJ + dissSizeI)
+                       WRITE(*,*) 'SXY = ', SXY, 'SXX = ', SXX, 'SYY = ', SYY
+                    ENDIF
+                    IF (R < RMIN) RMIN = R
+                    IF (R > RMAX) RMAX = R
                  ENDIF
-                 IF (R < RMIN) RMIN = R
-                 IF (R > RMAX) RMAX = R
-              ENDIF
-              dissMat(II,JJ) = ( 1d0 - R )
-
+                 dissMat(II,JJ) = ( 1d0 - R )
+              endif
+              if (metric .eq. 1) then
+                 dissMat(II,JJ) = SQRT( DELTASQ_SUM(II, JJ) )
+              elseif (metric .eq. 2) then
+                 dissMat(II,JJ) = dissMat(II, JJ) * SQRT( DELTASQ_SUM(II, JJ) )
+              end if
            ENDDO
 
         ENDDO
@@ -856,6 +1005,12 @@ program cluster
         call MPI_Barrier( MPI_COMM_WORLD, ierr )
      ELSE
         loadDissMatrix = .false.
+        if (calc_eu_dist) then
+           write(*,*) " Error: calculating eudlidian distance not supported for untiled configurations"
+           call MPI_Barrier( MPI_COMM_WORLD, ierr )
+           call MPI_Finalize( ierr )
+           ERROR STOP
+        endif
 
         RMIN = 9.999d9
         RMAX = -9.999d9
@@ -927,9 +1082,14 @@ program cluster
         !$OMP END PARALLEL DO
      ENDIF
 
-     DEALLOCATE( TRACER_SUM )
-     DEALLOCATE( TRACER_SQSUM )
-     DEALLOCATE( TRACER_XYSUM )
+     if (calc_one_minus_r) then
+        DEALLOCATE( TRACER_SUM )
+        DEALLOCATE( TRACER_SQSUM )
+        DEALLOCATE( TRACER_XYSUM )
+     end if
+     if (calc_eu_dist) then
+        DEALLOCATE( DELTASQ_SUM )
+     end if
      endTimer = MPI_Wtime()
      WRITE(*,*) ' Calclating dissimilarity matrix took ', endTimer - startTimer, ' seconds'
   END IF ! ( saveDissMatrix )
@@ -1493,9 +1653,22 @@ CONTAINS
     ! Save out the dissimilarity matrix and all the other information
     ! required to restart clustering in the middle
 
+199 FORMAT(a,i4.4,i2.2,i2.2, '_', i4.4,i2.2,i2.2,'_', i2.2, '_', &
+         a, '_', i2.2, '_', i4.4, 'x', i4.4, '_checkpoint-', i9.9, '.bin')
+198 FORMAT(a, i7.7,'_',i2.2, '_checkpoint-', i9.9, '.bin')
+
+    if (is_aircraft_data) then
+       WRITE(checkpointFileName,198) trim(outDir), grid_ni, linkage, step
+    else
+       WRITE(checkpointFileName,199) trim(outDir), start_year, start_mon,     &
+            start_day, end_year, end_mon, end_day, forecastHour,  &
+            trim(gemMachFieldName), linkage, grid_ni, grid_nj, step
+    end if
+    
     !! Debug info
 210 format(' numPoints = ', i0, ' numClustersThisNode = ', i0, ' myRank = ', i0, ' numProcs = ', i0)
-    write(*,*) '# # # Saving checkpoint at step ', step
+    write(*,*) '# # # Saving checkpoint at step ', step, &
+         ' to file ', checkpointFileName
     write(*,210) numPoints, numClustersThisNode, myRank, numProcs
     ! write(*,'(\"NODES(2,1,:) = \", 2(g12.4))') NODES(2,1,:)
 211 format('( " LIVE = ", ', i0, '( L1, ", ") )')
@@ -1523,18 +1696,6 @@ CONTAINS
     ! We will also need to set the file view by creating a block. Basically,
     ! we need to redo the saveDissMat block but replacing numPoints with
     ! the number of .TRUE. values in live.
-199 FORMAT(a,i4.4,i2.2,i2.2, '_', i4.4,i2.2,i2.2,'_', 2(i2.2, '_'), &
-         i4.4, 'x', i4.4, '_checkpoint-', i9.9, '.bin')
-198 FORMAT(a, i7.7,'_',i2.2, '_checkpoint-', i9.9, '.bin')
-
-    if (is_aircraft_data) then
-       WRITE(checkpointFileName,198) trim(outDir), grid_ni, linkage, step
-    else
-       WRITE(checkpointFileName,199) trim(outDir), start_year, start_mon,     &
-            start_day, end_year, end_mon, end_day, forecastHour,  &
-            linkage, grid_ni, grid_nj, step
-    end if
-    
     call MPI_FILE_OPEN(MPI_COMM_WORLD, checkpointFilename, MPI_MODE_CREATE + MPI_MODE_WRONLY, MPI_INFO_NULL, mpi_uid, ierr)
     IF (IERR .ne. MPI_SUCCESS) THEN
        WRITE(*,*) ' ERROR: ', IERR, ' Opening file ', trim(checkpointFileName)
@@ -1667,11 +1828,13 @@ CONTAINS
     
   end subroutine save_cluster_checkpoint
     
-  subroutine load_cluster_checkpoint(numPoints, numClustersThisNode, myRank,   &
-                                     numProcs, myClusters, clusterRanks,        &
-                                     clusterDissimilarities, clusterPairs,     &
+  subroutine load_cluster_checkpoint(checkPointFileName, numPoints,        &
+                                     numClustersThisNode, myRank,          &
+                                     numProcs, myClusters, clusterRanks,   &
+                                     clusterDissimilarities, clusterPairs, &
                                      live, PQueues, step, NODES, outputDir)
 
+    character(LEN=256), intent(IN) :: checkPointFileName
     integer, intent(IN)       :: numPoints, numClustersThisNode, myRank, numProcs
     integer, intent(IN)       :: myClusters(numClustersThisNode)
     integer, intent(IN)       :: clusterRanks(numPoints)
@@ -1692,7 +1855,7 @@ CONTAINS
     integer                   :: nodeType, dissMatRowType, dissMatBlockType
     integer(KIND=MPI_OFFSET_KIND):: disp
     integer                   :: mpi_uid
-    character(LEN=256)        :: checkpointFilename, fmt
+    character(LEN=256)        :: fmt
     real*8, allocatable, dimension(:)  :: dissMatRow
     integer, allocatable, dimension(:) :: clusterPairsFlat
 
@@ -1708,8 +1871,6 @@ CONTAINS
     write(fmt, 211) numPoints
     ! write(*, fmt) live
     
-    checkpointFileName = trim(outputDir) // 'checkpoint.bin'
-
     call MPI_FILE_OPEN(MPI_COMM_WORLD, trim(checkpointFileName), MPI_MODE_RDONLY, MPI_INFO_NULL, mpi_uid, ierr)
     IF (IERR .ne. MPI_SUCCESS) THEN
        WRITE(*,*) ' ERROR: Opening file ', trim(checkpointFileName)
