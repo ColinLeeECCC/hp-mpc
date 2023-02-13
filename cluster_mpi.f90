@@ -254,6 +254,8 @@ program cluster
   
 
   call MPI_BCast(inDir, len(inDir), MPI_CHARACTER, ROOT, MPI_COMM_WORLD, ierr)
+  call MPI_BCast(acFileName,                             &
+                   len(acFileName), MPI_CHARACTER, ROOT, MPI_COMM_WORLD, ierr)
   call MPI_BCast(forecastHour,  1, MPI_INTEGER, ROOT, MPI_COMM_WORLD, ierr)
   call MPI_BCast(startTimestep, 1, MPI_INTEGER, ROOT, MPI_COMM_WORLD, ierr)
   call MPI_BCast(start_year,    1, MPI_INTEGER, ROOT, MPI_COMM_WORLD, ierr)
@@ -299,6 +301,7 @@ program cluster
 
   write(*,*) 'limI = ', limI, ' limJ = ', limJ, ' ctrLat = ', ctrLat, ' ctrLon = ', ctrLon
 
+  write(*,*) " Is aircraft data?", is_aircraft_data
   if (.not. is_aircraft_data) then
      strLen = len_trim(inDir)
      IF (inDir(strLen:strLen) .ne. '/') THEN
@@ -328,8 +331,8 @@ program cluster
      
      numPoints = grid_ni * grid_nj
   else
-
-     dataFileName = acFileName
+     WRITE(*,*) ' Got AC filename = ', trim(acFileName)
+     dataFileName = trim(acFileName)
      WRITE(*,*) ' Reading data from ', trim(dataFileName)
      WRITE(*,*) ' Using field ', trim(ncFieldName)
      WRITE(*,*) ' Ouputting to ', trim(outDir)
