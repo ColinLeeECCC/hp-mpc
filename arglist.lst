@@ -1,14 +1,14 @@
-/fs/site5/eccc/aq/r1/cle001/model_outputs/deposition/netcdf/run1
+/fs/site5/eccc/aq/r1/cle001/model_outputs/nc4_comp_run1/
 00
 420
 2017 08 01
 2017 08 07
 0
 2
-171
-TSUL
-Total Sulphur Deposition
-/space/hall5/sitestore/eccc/aq/r1/cle001/src/hierarchical-clustering-dev/output/
+310
+S2
+Sulphur Dioxide
+/space/hall5/sitestore/eccc/aq/r1/cle001/src/hierarchical-clustering2/output/
 F
-3000
-T
+9999999
+F

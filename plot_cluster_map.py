@@ -99,21 +99,98 @@ def main(filename='map_cluster_2017080100_2018103100_N2_02_0.80.nc4', outfile=No
     #                     loc=4, prop={'size': 12}, frameon=True)
     # ax.add_artist(text)
     
-    # mark a known place to help us geo-locate ourselves
-    ax.plot(-113.48244, 53.56462, 'bo', markersize=4, transform=ccrs.Geodetic())
-    ax.text(-113.1, 53.7, 'Edmonton', transform=ccrs.Geodetic())
-    ax.plot(-114.055482, 51.069558, 'bo', markersize=4, transform=ccrs.Geodetic())
-    ax.text(-113.8, 51.2, 'Calgary', transform=ccrs.Geodetic())
+    # # mark a known place to help us geo-locate ourselves
+    # ax.plot(-113.48244, 53.56462, 'bo', markersize=4, transform=ccrs.Geodetic())
+    # ax.text(-113.1, 53.7, 'Edmonton', transform=ccrs.Geodetic())
+    # ax.plot(-114.055482, 51.069558, 'bo', markersize=4, transform=ccrs.Geodetic())
+    # ax.text(-113.8, 51.2, 'Calgary', transform=ccrs.Geodetic())
+
+    # # Mark the current location of Mildred lake and the 2 alternatives
+    # ax.plot(-111.564147, 57.050006, marker='o', markersize=10,
+    #         markerfacecolor='green', color='white',
+    #         transform=ccrs.Geodetic())
+    # ax.text(-111.557, 57.050006, 'Mildred Lake', transform=ccrs.Geodetic())
+    # ax.plot(-111.57798, 57.045828, marker='o', markersize=10,
+    #         markerfacecolor='blue', color='white',
+    #         transform=ccrs.Geodetic())
+    # ax.text(-111.9, 57.040, 'ML alt', transform=ccrs.Geodetic())
+    # ax.plot(-111.61209, 57.105280, marker='o', markersize=10,
+    #         markerfacecolor='red', color='white',
+    #         transform=ccrs.Geodetic())
+    # ax.text(-111.62, 57.105, 'Poplar Creek', transform=ccrs.Geodetic())
+    # Mark the current location of Poplar Creek and the 2 alternatives
+    # ax.plot(-111.61209, 57.105280, marker='o', markersize=10,
+    #         markerfacecolor='green', color='white',
+    #         transform=ccrs.Geodetic())
+    # ax.text(-111.62, 57.105, 'Poplar Creek', transform=ccrs.Geodetic())
+    # ax.plot(-111.61132, 57.13059, marker='o', markersize=10,
+    #         markerfacecolor='green', color='white',
+    #         transform=ccrs.Geodetic())
+    # ax.text(-111.61132, 57.13059, 'Option 1', transform=ccrs.Geodetic())
+    # ax.plot(-111.61662, 57.12364, marker='o', markersize=10,
+    #         markerfacecolor='blue', color='white',
+    #         transform=ccrs.Geodetic())
+    # ax.text(-111.61662, 57.12364, 'Option 2', transform=ccrs.Geodetic())
+    # # Mark the current location of Fort McKay South and the alternative
+    # ax.plot(-111.642344, 57.149175, marker='o', markersize=10,
+    #         markerfacecolor='green', color='white',
+    #         transform=ccrs.Geodetic())
+    # ax.text(-111.742344, 57.149175, 'Fort McKay South', transform=ccrs.Geodetic())
+    # ax.plot(-111.63349, 57.14138, marker='o', markersize=10,
+    #         markerfacecolor='blue', color='white',
+    #         transform=ccrs.Geodetic())
+    # ax.text(-111.63349, 57.14138, 'FMS Alt', transform=ccrs.Geodetic())
+    # # Mark the current location of Firebag and Wapasu
+    # ax.plot(-110.89799, 57.239525, marker='o', markersize=10,
+    #         markerfacecolor='green', color='white',
+    #         transform=ccrs.Geodetic())
+    # ax.text(-110.89799, 57.239525, 'Firebag', transform=ccrs.Geodetic())
+    # ax.plot(-111.0385386, 57.25913818, marker='o', markersize=10,
+    #         markerfacecolor='blue', color='white',
+    #         transform=ccrs.Geodetic())
+    # ax.text(-111.0385386, 57.25913818, 'Wapasu', transform=ccrs.Geodetic())
+    # Mark the current location of all the southern regional sites
+    ax.plot(-110.749758, 55.903286, marker='o', markersize=10,
+            markerfacecolor='green', color='white',
+            transform=ccrs.Geodetic())
+    ax.plot(-111.440343, 55.812883, marker='o', markersize=10,
+            markerfacecolor='green', color='white',
+            transform=ccrs.Geodetic())
+    ax.plot(-111.172798, 55.621487, marker='o', markersize=10,
+            markerfacecolor='green', color='white',
+            transform=ccrs.Geodetic())
+    ax.plot(-111.078877, 55.632330, marker='o', markersize=10,
+            markerfacecolor='green', color='white',
+            transform=ccrs.Geodetic())
+    ax.plot(-110.705815, 55.667804, marker='o', markersize=10,
+            markerfacecolor='green', color='white',
+            transform=ccrs.Geodetic())
+    ax.plot(-110.876009, 55.579153, marker='o', markersize=10,
+            markerfacecolor='green', color='white',
+            transform=ccrs.Geodetic())
+    ax.plot(-110.9759839, 55.51870937, marker='o', markersize=10,
+            markerfacecolor='green', color='white',
+            transform=ccrs.Geodetic())
+    ax.plot(-110.865308, 55.523807, marker='o', markersize=10,
+            markerfacecolor='green', color='white',
+            transform=ccrs.Geodetic())
+    ax.plot(-111.0139229, 55.343734, marker='o', markersize=10,
+            markerfacecolor='green', color='white',
+            transform=ccrs.Geodetic())
+    ax.plot(-111.218823, 55.461647, marker='o', markersize=10,
+            markerfacecolor='green', color='white',
+            transform=ccrs.Geodetic())
 
     reader = shpreader.Reader('/space/hall5/sitestore/eccc/aq/r1/juz001/cnfs_pxarqdr2/Shapefile/OS_SubLayers_w_Org/OS_Cleared_D.shp')
     # There is no way to automatically load the projection file with a shapefile
     # so I am doing this manually and harcoding it >:*|
     tm = ccrs.TransverseMercator(false_easting=500000.0, false_northing=0.0, central_longitude=-115.0, scale_factor=0.9992, central_latitude=0.0)
     
-    os_ops = cfeature.ShapelyFeature(reader.geometries(), tm, edgecolor='red')
+    os_ops = cfeature.ShapelyFeature(reader.geometries(), tm, edgecolor='red', alpha=0.5)
     ax.add_feature(os_ops)
 
-    cb = fig.colorbar(pcm, ax=ax)
+    # cb = fig.colorbar(pcm, ax=ax)
+    plt.tight_layout()
     if outfile is None:
         plt.show()
     else:

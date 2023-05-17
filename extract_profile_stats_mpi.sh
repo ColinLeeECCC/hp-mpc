@@ -28,7 +28,7 @@ while (( "$#" )); do
     ## oe-00000: groups in the code, so we need to divide numdays by mpi_y
     ## Maybe this only happens on the frontend machines...
     if [[ $f == *"ppp5-"* || $f == *"ppp6-"* ]]; then
-	echo "$f -> dividing numdays"
+	# echo "$f -> dividing numdays"
 	numdays=$(( numdays / mpi_y ))
     fi
     
