@@ -38,6 +38,8 @@ if __name__ == "__main__":
     parser.add_argument("-g", "--debug", action='store_true',
                         help="Turn on debug printing")
     parser.add_argument("--start", help="The starting X and Y for extracting")
+    parser.add_argument("-o", "--outfile", default="map_cluster.nc4",
+                        help="Optional output nc4 filename.")
 
                         
 
@@ -55,6 +57,13 @@ if __name__ == "__main__":
               " final number of clusters, but not both.")
         exit(-1)
 
+    try:
+        with open(args.outfile, 'w') as ofh:
+            pass
+        outfile = args.outfile
+    except:
+        print("Please provide a valid outfile name")
+        exit(-2)
 
     import numpy as np
     from math import floor
@@ -192,4 +201,4 @@ if __name__ == "__main__":
         {'clusters': (("rlat", "rlon"), clmap, {'grid_mapping':"rotated_pole"} )},
         coords=coords
     )
-    clmap_ds.to_netcdf("map_cluster.nc4")
+    clmap_ds.to_netcdf(outfile)

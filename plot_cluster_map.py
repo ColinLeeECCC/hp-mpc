@@ -10,7 +10,7 @@ from math import ceil
 
 import xarray as xr
 
-def main(filename='map_cluster_2017080100_2018103100_N2_02_0.80.nc4', outfile=None):
+def main(filename='map_cluster_2017080100_2018103100_N2_02_0.80.nc4', outfile=None, rval=None, spec=None):
     ds = xr.open_dataset(filename)
     # ds = xr.open_dataset('map_cluster_2017080100_2018103100_S2_02_0.85.nc4')
     midrlon = int(len(ds.rlon)/2)
@@ -25,6 +25,9 @@ def main(filename='map_cluster_2017080100_2018103100_N2_02_0.80.nc4', outfile=No
     # ax.set_extent([np.min(ds.lon.data), np.max(ds.lon.data),
     #                np.min(ds.lat.data), np.max(ds.lat.data)],
     #               crs=ccrs.Mercator())
+
+    # ax.set_extent([-111.2, -109.8,
+    #               57.25, 58.25], crs=ccrs.Mercator())
 
     # Create a feature for States/Admin 1 regions at 1:50m from Natural Earth
     states_provinces = cfeature.NaturalEarthFeature(
@@ -43,52 +46,63 @@ def main(filename='map_cluster_2017080100_2018103100_N2_02_0.80.nc4', outfile=No
     ax.add_feature(cfeature.RIVERS)
     ax.add_feature(states_provinces)
 
-    clusters = ds.clusters.data
+    clusters = ds.clusters.data.astype('int64') - 1
+    numClust=int(np.max(ds.clusters)) + 1
+    # Assign a colour index from 0-19 to each cluster
+    cl_cm = np.arange(numClust)
+    cl_cm = np.remainder( cl_cm, 20 )
+
     while True:
+        colidx = np.take(cl_cm, clusters)
         # we're using a repeated, random, 20-colour colourmap, which means
         # if we have any adjacent (in lat-lon space) clusters with IDs that
         # differ by a multiple of 20, they get the same colour and look like
         # one cluster. So let's try to detect that situation.
-        not_same_idx = np.logical_not(
-            np.logical_and(
-                np.equal( clusters[:-1,:-1], clusters[:-1,1:] ),
-                np.equal( clusters[1:,:-1],  clusters[1:,1:] )
-            )
-        )
-        colidx = np.remainder( clusters, 20 )
-        same_col = np.logical_and(
-            np.equal( colidx[:-1,:-1],  colidx[:-1,1:] ),
-            np.equal( colidx[1:,:-1], colidx[1:,1:] )
-        )
+        # not_same_idx = np.logical_not(
+        #     np.logical_and(
+        #         np.equal( clusters[:-1,:-1], clusters[:-1,1:] ),
+        #         np.equal( clusters[1:,:-1],  clusters[1:,1:] )
+        #     )
+        # )
+        # same_col = np.logical_and(
+        #     np.equal( colidx[:-1,:-1],  colidx[:-1,1:] ),
+        #     np.equal( colidx[1:,:-1], colidx[1:,1:] )
+        # )
 
-        numClust=int(np.max(ds.clusters))
 
-        tmp = clusters[1:,1:]
-        print('tmp.shape: ', tmp.shape)
-        print('not_same_idx.shape: ', not_same_idx.shape)
-        print('same_col.shape: ', same_col.shape)
-        blenders= np.unique(tmp[np.logical_and(not_same_idx, same_col)])
+        # tmp = clusters[1:,1:]
+        # print('tmp.shape: ', tmp.shape)
+        # print('not_same_idx.shape: ', not_same_idx.shape)
+        # print('same_col.shape: ', same_col.shape)
+        # blenders= np.unique(tmp[np.logical_and(not_same_idx, same_col)])
+        mismatch_left = np.logical_and(
+            np.logical_not( np.equal( clusters[:-1,:-1], clusters[:-1, 1:] ) ),
+            np.equal( colidx[:-1,:-1], colidx[:-1, 1:] )
+        )
+        mismatch_down = np.logical_and(
+            np.logical_not( np.equal( clusters[:-1,:-1], clusters[1:, :-1] ) ),
+            np.equal( colidx[:-1,:-1], colidx[1:, :-1] )
+        )
+        tmp = clusters[:-1,:-1]
+        blenders = np.unique(tmp[np.logical_or(mismatch_left, mismatch_down)])
+        
         if len(blenders) == 0:
             break
         print('These colours clash: ',blenders)
         for i,b in enumerate(blenders):
-            if i % 2 == 1:
-                continue
-            bnew = np.floor(np.random.rand(1) * numClust)
-            while (bnew % 20) == (b % 20):
-                bnew = np.random.rand(1) * numClust
-            print('Swapping {} and {}'.format(b, bnew))
-            tmp = clusters
-            tmp[np.equal(tmp, b)] = numClust+1
-            tmp[np.equal(tmp, bnew)] = b
-            tmp[np.equal(tmp, numClust+1)] = bnew
-            clusters=tmp
+            # if i % 2 == 1:
+            #     continue
+            cnew = np.floor(np.random.rand(1) * 20)
+            while cnew == cl_cm[b]:
+                cnew = np.floor(np.random.rand(1) * 20)
+            print('Swapping {} from {} to {}'.format(b, cl_cm[b], cnew))
+            cl_cm[b] = cnew
     
     # plt.contourf(ds.lon, ds.lat, ds.clusters, transform=ccrs.PlateCarree())
     mult = ceil(float(numClust) / 20.0)
     print('numClust = {:}, mult = {:}'.format(numClust, mult))
     tmpcm = ListedColormap(np.tile(cm.get_cmap('tab20').colors, (mult,1))[0:numClust,:])
-    pcm = ax.pcolormesh(ds.lon, ds.lat, clusters,
+    pcm = ax.pcolormesh(ds.lon, ds.lat, colidx,
                         transform=ccrs.PlateCarree(),
                         cmap=tmpcm)
     
@@ -140,55 +154,72 @@ def main(filename='map_cluster_2017080100_2018103100_N2_02_0.80.nc4', outfile=No
     #         markerfacecolor='blue', color='white',
     #         transform=ccrs.Geodetic())
     # ax.text(-111.63349, 57.14138, 'FMS Alt', transform=ccrs.Geodetic())
-    # # Mark the current location of Firebag and Wapasu
-    # ax.plot(-110.89799, 57.239525, marker='o', markersize=10,
+    # Mark the current location of Firebag and Wapasu
+    ax.plot(-110.89799, 57.239525, marker='o', markersize=10,
+            markerfacecolor='green', color='white',
+            transform=ccrs.Geodetic())
+    ax.text(-110.89799, 57.239525, 'Firebag', transform=ccrs.Geodetic())
+    ax.plot(-111.0385386, 57.25913818, marker='o', markersize=10,
+            markerfacecolor='blue', color='white',
+            transform=ccrs.Geodetic())
+    ax.text(-111.0385386, 57.25913818, 'Wapasu', transform=ccrs.Geodetic())
+    # # Mark the current location of all the southern regional sites
+    # ax.plot(-110.749758, 55.903286, marker='o', markersize=10,
     #         markerfacecolor='green', color='white',
     #         transform=ccrs.Geodetic())
-    # ax.text(-110.89799, 57.239525, 'Firebag', transform=ccrs.Geodetic())
-    # ax.plot(-111.0385386, 57.25913818, marker='o', markersize=10,
-    #         markerfacecolor='blue', color='white',
+    # ax.plot(-111.440343, 55.812883, marker='o', markersize=10,
+    #         markerfacecolor='green', color='white',
     #         transform=ccrs.Geodetic())
-    # ax.text(-111.0385386, 57.25913818, 'Wapasu', transform=ccrs.Geodetic())
-    # Mark the current location of all the southern regional sites
-    ax.plot(-110.749758, 55.903286, marker='o', markersize=10,
-            markerfacecolor='green', color='white',
-            transform=ccrs.Geodetic())
-    ax.plot(-111.440343, 55.812883, marker='o', markersize=10,
-            markerfacecolor='green', color='white',
-            transform=ccrs.Geodetic())
-    ax.plot(-111.172798, 55.621487, marker='o', markersize=10,
-            markerfacecolor='green', color='white',
-            transform=ccrs.Geodetic())
-    ax.plot(-111.078877, 55.632330, marker='o', markersize=10,
-            markerfacecolor='green', color='white',
-            transform=ccrs.Geodetic())
-    ax.plot(-110.705815, 55.667804, marker='o', markersize=10,
-            markerfacecolor='green', color='white',
-            transform=ccrs.Geodetic())
-    ax.plot(-110.876009, 55.579153, marker='o', markersize=10,
-            markerfacecolor='green', color='white',
-            transform=ccrs.Geodetic())
-    ax.plot(-110.9759839, 55.51870937, marker='o', markersize=10,
-            markerfacecolor='green', color='white',
-            transform=ccrs.Geodetic())
-    ax.plot(-110.865308, 55.523807, marker='o', markersize=10,
-            markerfacecolor='green', color='white',
-            transform=ccrs.Geodetic())
-    ax.plot(-111.0139229, 55.343734, marker='o', markersize=10,
-            markerfacecolor='green', color='white',
-            transform=ccrs.Geodetic())
-    ax.plot(-111.218823, 55.461647, marker='o', markersize=10,
-            markerfacecolor='green', color='white',
-            transform=ccrs.Geodetic())
+    # ax.plot(-111.172798, 55.621487, marker='o', markersize=10,
+    #         markerfacecolor='green', color='white',
+    #         transform=ccrs.Geodetic())
+    # ax.plot(-111.078877, 55.632330, marker='o', markersize=10,
+    #         markerfacecolor='green', color='white',
+    #         transform=ccrs.Geodetic())
+    # ax.plot(-110.705815, 55.667804, marker='o', markersize=10,
+    #         markerfacecolor='green', color='white',
+    #         transform=ccrs.Geodetic())
+    # ax.plot(-110.876009, 55.579153, marker='o', markersize=10,
+    #         markerfacecolor='green', color='white',
+    #         transform=ccrs.Geodetic())
+    # ax.plot(-110.9759839, 55.51870937, marker='o', markersize=10,
+    #         markerfacecolor='green', color='white',
+    #         transform=ccrs.Geodetic())
+    # ax.plot(-110.865308, 55.523807, marker='o', markersize=10,
+    #         markerfacecolor='green', color='white',
+    #         transform=ccrs.Geodetic())
+    # ax.plot(-111.0139229, 55.343734, marker='o', markersize=10,
+    #         markerfacecolor='green', color='white',
+    #         transform=ccrs.Geodetic())
+    # ax.plot(-111.218823, 55.461647, marker='o', markersize=10,
+    #         markerfacecolor='green', color='white',
+    #         transform=ccrs.Geodetic())
 
     reader = shpreader.Reader('/space/hall5/sitestore/eccc/aq/r1/juz001/cnfs_pxarqdr2/Shapefile/OS_SubLayers_w_Org/OS_Cleared_D.shp')
     # There is no way to automatically load the projection file with a shapefile
     # so I am doing this manually and harcoding it >:*|
     tm = ccrs.TransverseMercator(false_easting=500000.0, false_northing=0.0, central_longitude=-115.0, scale_factor=0.9992, central_latitude=0.0)
     
-    os_ops = cfeature.ShapelyFeature(reader.geometries(), tm, edgecolor='red', alpha=0.5)
+    os_ops = cfeature.ShapelyFeature(reader.geometries(), tm, edgecolor='red', facecolor='none', alpha=0.5)
     ax.add_feature(os_ops)
 
+    ax.set_extent([-111.4, -110.2,
+                   57.0, 57.5])
+
+    textstr = ""
+
+    if spec is not None:
+        textstr = textstr + f"{spec}\n"
+        
+    textstr = textstr + f"N = {numClust}"
+
+    if rval is not None:
+        textstr = textstr + f"\nR \u2265 {rval}"
+        
+    text = AnchoredText(textstr,
+                        loc=1, prop={'size': 12}, frameon=True)
+    ax.add_artist(text)
+    
     # cb = fig.colorbar(pcm, ax=ax)
     plt.tight_layout()
     if outfile is None:
@@ -199,9 +230,21 @@ def main(filename='map_cluster_2017080100_2018103100_N2_02_0.80.nc4', outfile=No
 
 if __name__ == '__main__':
     import sys
-    if len(sys.argv) == 1:
-        main()
-    elif len(sys.argv) == 2:
-        main(filename=sys.argv[1])
-    else:
-        main(filename=sys.argv[1], outfile=sys.argv[2])
+    import argparse
+
+    parser = argparse.ArgumentParser()
+    parser.add_argument('infile')
+    parser.add_argument('outfile', nargs='?', default=None)
+    parser.add_argument('-r', '--rval', default=None)
+    parser.add_argument('-s', '--species', default=None)
+
+    args = parser.parse_args()
+
+    main(filename=args.infile, outfile=args.outfile, rval=args.rval, spec=args.species)
+         
+    # if len(sys.argv) == 1:
+    #     main()
+    # elif len(sys.argv) == 2:
+    #     main(filename=sys.argv[1])
+    # else:
+    #     main(filename=sys.argv[1], outfile=sys.argv[2])
