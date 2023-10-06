@@ -43,12 +43,14 @@ program cluster
   integer                    :: forecastHour, startTimestep
   character(256)             :: dataFileName, acFileName, checkPtFilename
   character(256)             :: tmpFileName
-  integer                    :: ncId, variableId
+  integer                    :: ncId, variableId, nDims
   integer, dimension(NF90_MAX_VAR_DIMS) &
-       :: dimIds
+       :: dimIds, getVarStart, getVarCount
   integer                    :: grid_ni, grid_nj, grid_nt
   integer                    :: start_ni, start_nj
   integer                    :: gridi, gridj, gridi2, gridj2
+  character(1)               :: fileType
+  integer                    :: latId, lonId, timeId
   integer                    :: limI, limJ
   real*8                     :: ctrLat, ctrLon
   integer                    :: numPoints, numSpectral
@@ -304,10 +306,6 @@ program cluster
   write(*,*) " Is aircraft data?", is_aircraft_data
   if (.not. is_aircraft_data) then
      strLen = len_trim(inDir)
-     IF (inDir(strLen:strLen) .ne. '/') THEN
-        inDir = trim(inDir) // '/'
-     ENDIF
-
      WRITE(*,*) ' Reading compressed netcdf data from ', trim(inDir)
      WRITE(*,101) start_year, start_mon, start_day, end_year, end_mon, end_day
 101  FORMAT(' Doing ', i4, '-', i2, '-', i2, ' to ', i4, '-', i2, '-', i2)
@@ -317,13 +315,11 @@ program cluster
 
      ! forecastHour = 18
      
-     ! Read in a single file to get model domain size
-103  FORMAT(A, i4.4, i2.2, i2.2, i2.2 '_', i6.6, 'p.netcdf4.compressed')
-     WRITE(dataFileName, 103), trim(inDir), start_year, start_mon, start_day, &
-          forecastHour, startTimestep
+     ! Read in the first file to get model domain size
+     call expand_date(inDir, dataFileName, start_year, start_mon, start_day, 1)
 
      call get_domain( dataFileName, gemMachFieldName, limI, limJ, ctrLat, ctrLon, &
-          grid_ni, grid_nj, grid_nt, start_ni, start_nj)
+          grid_ni, grid_nj, grid_nt, start_ni, start_nj, latId, lonId, timeId, fileType)
 
 102  FORMAT(' Using only ', i3, ':', i3, ',', i3,':',i3, ' cells of available GEM-MACH domain, centred at ', f8.2, ', ', f8.2)
      write(*,102) start_ni, grid_ni, start_nj, grid_nj, ctrLat, ctrLon
@@ -346,7 +342,7 @@ program cluster
      forecastHour = 18
 
      call check( nf90_inq_varid( ncId, trim(ncFieldName), variableId ) )
-     call check( nf90_inquire_variable( ncId, variableId, dimIds = dimIds ) )
+     call check( nf90_inquire_variable( ncId, variableId, nDims = nDims, dimIds = dimIds ) )
      call check( nf90_inquire_dimension( ncID, dimIds(1), len = grid_ni ) )
      call check( nf90_inquire_dimension( ncID, dimIds(2), len = grid_nj ) )
 
@@ -723,9 +719,19 @@ program cluster
         numDays = int(end_julian - start_julian + 1)
         numTimesteps = numDays * 24
 
-108  FORMAT(A, i8.8, i2.2 '_', i6.6, 'p.netcdf4.compressed')
+        ! This is the "start" vector for the nf90_get_var call
+        getVarStart(:) = 1
+        getVarStart(latId)   = start_ni
+        getVarStart(lonId)   = start_nj
+        getVarCount(:) = 1
+        getVarCount(latId)   = grid_ni
+        getVarCount(lonId)   = grid_nj
 
-     DO IDAY = 1, numDays
+108     FORMAT(A, i8.8, i2.2 '_', i6.6, 'p.netcdf4.compressed')
+        ncid = -1
+
+        DO IDAY = 1, numDays
+           ! Julian day starts a noon, so we add one to get to the right spot...
         call j2d(start_julian+IDAY*1.0, current_date, ierr)
         current_year = current_date / 10000
         current_mon  = current_date / 100 - current_year * 100
@@ -735,20 +741,27 @@ program cluster
 
         ! each file contains 1 hourly dataset, so read in all 24 to get the full day
         DO IHR = 1, 24
-           ! WRITE(*,'(10x,a,i2.2,a,i2.2)') 'Hr: ', IHR, ':', 0
-           WRITE(dataFileName, 108), trim(inDir), current_date, &
-                forecastHour, startTimestep + (IHR-1)*60
-           ierr = nf90_open( trim(dataFileName), NF90_NOWRITE, ncId, &
-                comm=MPI_COMM_WORLD, info=MPI_INFO_NULL)
-           IF (ierr < 0) THEN
-              WRITE(*,*) 'Error while opening "', trim(dataFileName), '"'
-              call MPI_Abort(MPI_COMM_WORLD, 2, IERR)
-           ENDIF
+           ! Check if it's time to load a new file
+           if (load_new_file(fileType, current_year, current_mon, &
+                current_day, IHR) .or. ncid .eq. -1) then
+              if (ncId .gt. -1) then
+                 ierr = nf90_close( ncId )
+              endif
+              call expand_date(inDir, dataFileName, current_year, current_mon, current_day, ihr)
+              ierr = nf90_open( trim(dataFileName), NF90_NOWRITE, ncId, &
+                   comm=MPI_COMM_WORLD, info=MPI_INFO_NULL)
+              IF (ierr .ne. NF90_NOERR) THEN
+                 WRITE(*,*) 'Error while opening "', trim(dataFileName), '"'
+                 call MPI_Abort(MPI_COMM_WORLD, 2, IERR)
+              ENDIF
+              ! Restart the timestep counter
+              getVarStart(timeId) = 0
+              ierr = nf90_inq_varid( ncId, trim(gemMachFieldName), variableId )
+              ierr = nf90_inquire_variable( ncId, variableId, dimIds = dimIds )
+           endif
+           getVarStart(timeId) = getVarStart(timeId) + 1
 
-           ierr = nf90_inq_varid( ncId, trim(gemMachFieldName), variableId )
-           ierr = nf90_inquire_variable( ncId, variableId, dimIds = dimIds )
-           ierr = nf90_get_var( ncid, variableId, buffer,start=(/ start_ni, start_nj /))
-           ierr = nf90_close( ncId )
+           ierr = nf90_get_var( ncid, variableId, buffer,start=getVarStart, count=getVarCount)
 
            HRS_SINCE_START = 24 * ( IDAY - 1 ) + IHR - 1
            IF ( tileDissMat ) THEN
@@ -889,6 +902,10 @@ program cluster
            ENDIF ! ( tileDissMat )
         ENDDO
      ENDDO
+     if (ncid .ne. -1) then
+        ierr = nf90_close(ncid)
+     endif
+     
      end if ! if (is_aircraft_data)
 
      IF ( tileDissMat ) THEN
@@ -2156,7 +2173,8 @@ CONTAINS
   end subroutine calc_new_distance
 
   subroutine get_domain(dataFileName, fieldName, limI, limJ, &
-       ctrLat, ctrLon, grid_ni, grid_nj, grid_nt, start_ni, start_nj)
+       ctrLat, ctrLon, grid_ni, grid_nj, grid_nt, start_ni, start_nj, &
+       latId, lonId, timeId, fileType)
 
     character(256), intent(in)       :: dataFileName
     character(8),   intent(in)       :: fieldName
@@ -2164,27 +2182,67 @@ CONTAINS
     real*8,         intent(in)       :: ctrLat, ctrLon
     integer,        intent(out)      :: grid_ni, grid_nj, grid_nt
     integer,        intent(out)      :: start_ni, start_nj
+    integer, optional, intent(out)   :: latId, lonId, timeId
+    character(1), optional, intent(out):: fileType ! hourly, daily, monthly, annual
 
     integer                          :: ierr, i, j, m(2)
     integer                          :: ncId, variableId
     integer                          :: nvar, latVarId, lonVarId
     integer                          :: ni, nj, lat_ni, lat_nj, lon_ni, lon_nj
     integer, dimension(NF90_MAX_VAR_DIMS)   :: dimIds, dimIds2
+    integer                          :: tmpI, nDims
     character(256)                   :: std_name
+    character(NF90_MAX_NAME)         :: dimName
     real*8, allocatable, dimension(:,:) :: lat, lon, delta
     integer                          :: limI_lcl, limJ_lcl
 
-     ierr = nf90_opeN( trim(dataFileName), NF90_NOWRITE, ncId )
-     IF (ierr < 0) THEN
-        WRITE(*,*) 'Error while opening ', trim(dataFileName)
+    write(*,*) ' Obtaining domain information from ', trim(dataFileName)
+    
+    ierr = nf90_opeN( trim(dataFileName), NF90_NOWRITE, ncId)!, &
+!         comm=MPI_COMM_WORLD, info=MPI_INFO_NULL)
+     IF (ierr .ne. NF90_NOERR) THEN
+        WRITE(*,*) 'Error ', ierr, ' while opening ', trim(dataFileName)
+        write(*,*) trim(nf90_strerror(ierr))
         call MPI_Abort(MPI_COMM_WORLD, 2, IERR)
      ENDIF
 
      ierr = nf90_inq_varid( ncId, trim(gemMachFieldName), variableId )
-     ierr = nf90_inquire_variable( ncId, variableId, dimIds = dimIds )
-     ierr = nf90_inquire_dimension( ncID, dimIds(1), len = grid_ni )
-     ierr = nf90_inquire_dimension( ncID, dimIds(2), len = grid_nj )
-     ierr = nf90_inquire_dimension( ncID, dimIds(3), len = grid_nt )
+     ierr = nf90_inquire_variable( ncId, variableId, ndims = nDims, dimIds = dimIds )
+     write(*,*) ' Variable ', variableId, '(', trim(gemMachFieldName), ') has rank ', nDims
+     do i = 1, nDims
+        write(*,*) ' Inquiring dimension ', i, '...'
+        ierr = nf90_inquire_dimension( ncID, dimIds(i), len = tmpI, name = dimName)
+
+        if (trim(dimName) .eq. 'lat' .or.     &
+             trim(dimName) .eq. 'rlat' ) then
+           grid_ni = tmpI
+           if (present(latId)) latId = i
+        else if (trim(dimName) .eq. 'lon' .or.     &
+             trim(dimName) .eq. 'rlon' ) then
+           grid_nj = tmpI
+           if (present(lonId)) lonId = i
+        else if (trim(dimName) .eq. 'time') then
+           grid_nt = tmpI
+           if (present(timeId)) timeId = i
+        endif
+     enddo
+
+     if (present(fileType)) then
+        if (grid_nt .eq. 1) then
+           fileType = 'H' ! one file per hour
+        else if (grid_nt .eq. 24) then
+           fileType = 'D' ! one file per day
+        else if (grid_nt .ge. 672  &
+             .and. grid_nt .le. 744) then
+           fileType = 'M' ! one file per month
+        else if (grid_nt .ge. 8760 &
+             .and. grid_nt .le. 8784 ) then
+           fileType = 'A' ! one file per year (annum)
+        else
+           write(*,*) 'Unexpected time dimension length: ', grid_nt
+           ierr = -100
+        endif
+     endif
 
      limI_lcl = limI
      limJ_lcl = limJ
@@ -2411,5 +2469,69 @@ CONTAINS
        stop "Stopped"
     end if
   end subroutine check
+
+
+  ! This does not feel like the cleanest or most efficient way to
+  ! handle this but I don't have time to fix it right now
+  subroutine expand_date(instr, outstr, year, month, day, hour)
+
+    character(len=*), intent(in)  :: instr
+    integer,          intent(in)  :: year, month, day, hour
+    character(len=*), intent(out) :: outstr
+    
+    character(len=5)             :: tokens(4), replacements(4)
+    integer                      :: lengths(4), locn, i, startidx
+    character(len=1024)          :: tmpstr
+    character(len=4)             :: tokstrs(4)
+
+    ! Initialize toekns and replacement arrays
+    tokens = ['%YYYY', '%MM', '%DD', '%HH']
+    lengths = [5, 3, 3, 3]
+    write(tokstrs(1), '(i4.4)') year
+    write(tokstrs(2), '(i2.2)') month
+    write(tokstrs(3), '(i2.2)') day
+    write(tokstrs(4), '(i2.2)') hour
+
+    ! initially our string is just the original one with tokens
+    outstr = instr
+
+    ! loop over each token
+    do i = 1, 4
+       ! starting at the beginning of the string that was
+       ! left over from the previous pass
+       startidx = 1
+       tmpstr = outstr
+       outstr = ''
+       locn = index( tmpstr, trim(tokens(i)) )
+       do while (locn .ne. 0)
+          outstr = trim(outstr) // tmpstr(startidx:startidx + locn - 2) // trim(tokstrs(i))
+          startidx = startidx + locn - 1 + lengths(i)
+          locn = index( tmpstr(startidx:len(tmpstr)), trim(tokens(i)) )
+       end do
+       outstr = trim(outstr) // tmpstr(startidx:len(tmpstr))
+    enddo    
+  end subroutine expand_date
+
+  logical function load_new_file(fileType, year, month, day, hour)
+    character(1), intent(in)  :: fileType
+    integer,      intent(in)  :: year, month, day, hour
+    
+    if (fileType .eq. 'H') then
+       load_new_file = .true.
+    else if (fileType .eq. 'D' .and.  &
+         hour .eq. 1) then
+       load_new_file = .true.
+    else if (fileType .eq. 'M' .and.  &
+         day.eq. 1 .and. hour .eq. 1) then
+       load_new_file = .true.
+    else if (fileType .eq. 'Y' .and.  &
+         month .eq. 1 .and. day .eq. 1 &
+         .and. hour .eq. 1) then
+       load_new_file = .true.
+    else
+       load_new_file = .false.
+    endif
+  end function load_new_file
+    
 
 END PROGRAM CLUSTER
